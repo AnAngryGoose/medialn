@@ -7,43 +7,51 @@ tree from a disorganized media library. This will not touch/move the existing fi
 
 ## **What this does**
 
-- Scans a messy, unstructured movies or TV folder and builds a clean Jellyfin/Radarr-ready library
+- **Scans and restructures** a messy, unstructured movies or TV folder and builds a clean Jellyfin/Radarr-ready library
 
-- Handles any mix of file formats, naming conventions, folder structures 
-
-    - Well, it handles most of them used by files people add to arr stack. 
-
-- Detects and separates TV/miniseries/movie content automatically — nothing manual
-    
-    - This was my main issue. I had miniseries/tv mixed with the Movies folder. This will seperate them automatically. 
-
-- Automatic TMDB lookup matching, symlinking, and restructuring. 
+- **Automatic media type matching** with TMDB lookup matching, symlinking, and restructuring. 
     
     - Manual TMDB lookup for anything it can't match on its own
 
-- Multiple versions of the same movie handled automatically with quality tagging.   
+- **Doesn't break seeding** because it uses symlinks only. This was a big point when making this. 
+  
+    - Conciously creates a seperate folder for the symlinks to keep existing media as is. 
+
+    - Can then be used as clean slate for Arr integration after.
+  
+- **Detects and separates** TV/miniseries from movie content automatically — nothing manual
+    
+    - This was my main issue. I had miniseries/tv mixed with the Movies folder. This will seperate them automatically.
+
+    - Groups bare seasons folders by show automatically.
+
+- **Handles mixed file formats**, naming conventions, folder structures 
+
+    - Well, it handles most of them used by files people add to arr stack. 
+
+- **Multiple version grouping** of the same movie handled automatically with quality tagging.   
     
     - Works with different (1080p vs. 4k) and same (2 1080p files) resolutions. 
 
-- Groups bare season folders by show automatically
 
-- Warns you about anything ambiguous at the end
 
-    - Allows for manual matching to TMDB if, for example, a movie doesn't have a year in title. 
+- **Warns you about anything ambiguous** at the end.
+
+    - Gives warning for any folder that is missing a year or has no media in the parent folder. 
 
     - Also will let you choose whether to let it *try* to auto match it without year. 
 
-- Only uses absolute symlinks. 
+- **Only uses absolute symlinks**. 
 
     - Hardlinks can cause issues with MergerFS pools. Absolute symlinks work on everything always.
 
     - Absolute over relative symlinks also fix any pathing issue with Docker containers. 
 
-- Can test as a dry run before commiting to anything 
+- **Can test as a dry run** before commiting to anything 
 
-- Works fast. 
+- **Works fast**. 
 
-    - Scanned, matched, symlinked, and created structure for 1000 movie folders in about 3 seconds. 
+    - Scanned, matched, symlinked, and created structure for 1000 movie folders in about 1 second. 
 
 ---
 
@@ -53,15 +61,15 @@ For years I've tried to easily and cleanly setup radarr and the rest of the arr 
 
   - It also turns out, I'm pretty far off from that structure. 
 
-Ive tried a few solutions in the past, but they all had some problem. 
+Ive tried a few solutions in the past, but they all had some problem: 
 
-- You can rename it with the Arr stack itself, but you need to already have a clean library to get it running. Chicken and egg. Makes me sad. 
+- **Arr stack**: You can rename it with the Arr stack itself, but you need to already have a clean library to get it running. Chicken and egg. Makes me sad. 
 
-- Renamers like FileBot, or TinyMediaManager, etc will rename the files fine. But they rename the actual files. That breaks seeding and just makes everyone sad. 
+- **Renamers**:  like FileBot, or TinyMediaManager, etc will rename the files fine. But they rename the actual files. That breaks seeding and just makes everyone sad. 
 
   - Filebot **can** do symlinks via `--action symlink`, and it has TMDB lookup. But youd still have to manually sort movies vs tv across sometimes thousands of files, then sort them into folders, THEN rename them. People are sad again. 
 
-- rclone union or a sonarr extension will just merge paths. They can't rename/categorize content. Too bad. So sad. 
+- **rclone union** or a sonarr extension will just merge paths. They can't rename/categorize content. Too bad. So sad. 
 
 All hit at least one of these walls for me with a messy existing library:
 
