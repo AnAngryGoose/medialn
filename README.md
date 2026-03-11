@@ -129,20 +129,19 @@ movies-linked/
 
   - **Multi-version grouping**: two or more copies of the same title+year each get
     a quality suffix (1080P, 2160P, REMUX, etc.) instead of being discarded.
-    Same-resolution duplicates get .2, .3, ... appended to disambiguate.
+    Same-resolution duplicates get .2, .3, added to differentiate. 
 
-  - **Year/title protection**: year must be preceded by a separator character so
+  - **Year/title protection**: year must be preceded by a separator character (dot, space, bracket, paren) so
     numeric titles like "1917" or "2001" are not misread as release years.
 
   - **Episode detection**: folders containing 2+ episode files (S01E01, 1x01,
-    Episode.N, NofN) are skipped — make_tv_links.py symlinks those instead.
+    Episode.N, NofN) are skipped, make_tv_links.py symlinks those instead.
 
-  - **TMDB auto-lookup**: entries with no parseable year are flagged. At the end
-    of a real run you can choose to resolve them via concurrent TMDB search
-    (ThreadPoolExecutor, 8 workers) or leave them for manual matching.
+  - **TMDB auto-lookup**: entries with no listed year are flagged. At the end
+    of a real run you can choose to resolve them via a TMDB search or leave them for manual matching.
 
   - **Filename sanitization**: characters illegal on Windows/network mounts
-    (/ : \\ ? * " < > |) are replaced with - in all generated names.
+    (/ : \\ ? * " < > |) are replaced with `-` in all generated names.
 
   - **Sample exclusion**: word-boundary match (\bsample\b) avoids false positives
     like example.mkv.
@@ -177,7 +176,7 @@ tv-linked/
 ```
 
 **Features:**
-  - **Show grouping**: bare season folders (Show.S01.quality...) are parsed,
+  - **Show grouping**: bare season folders (Show.S01.quality...) are scanned,
     grouped by show name, and placed under Show Name/Season XX/.
 
   - **Pass-through**: folders already in correct Jellyfin structure are symlinked
@@ -185,11 +184,14 @@ tv-linked/
     
   - **Miniseries detection**: folders in /movies/ containing 2+ episode files
     (S01E01, 1x01, Episode.N, NofN) are routed here instead of movies-linked/.
+  
+      - This allows for adding miniseries in your /tv/ folder to be matched by Jellyfin. 
+      - Useful if adding a miniseries from a movie tracker.
 
-  - **Name overrides**: hardcoded corrections for known naming inconsistencies
+  - **Name overrides**: You can add defined, hardcoded corrections for known naming inconsistencies
     (e.g. "The Office US" -> "The Office (US)").
 
-  - **Orphan overrides**: bare "Season N" folders with no show context are mapped
+  - **Orphan overrides**: You can add an override for bare "Season N" folders with no show context are mapped
     to their correct show via ORPHAN_OVERRIDES.
 
   - **Episode format detection covers**: S01E01, 1x01, Episode.N, NofN.
@@ -217,7 +219,7 @@ python3 make_tv_links.py --clean     # remove broken links then rebuild
 
 ### 1. Configure mount paths
 
-At the top of each script, set the two path constants to match your setup:
+At the top of each script, set the two media paths to match your setup:
 
 ```python
 MEDIA_ROOT_HOST      = "/mnt/storage/data/media"   # path on the host
@@ -227,11 +229,11 @@ MEDIA_ROOT_CONTAINER = "/data/media"               # same path as seen inside Do
 `MEDIA_ROOT_HOST` is used to find files on disk. `MEDIA_ROOT_CONTAINER` is written
 into the symlink targets so they resolve correctly inside Jellyfin/Radarr/Sonarr.
 
-If you're not running inside Docker, set both to the same value.
+**NOTE:** you're not running inside Docker, set both to the same value.
 
 ### 2. TMDB API key (movies script only)
 
-Required only if you want auto-lookup for entries with no parseable year.
+Required only if you want auto-lookup for entries with no listed year.
 Get a free key at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api).
 
 ```bash
@@ -248,10 +250,10 @@ TMDB_API_KEY = "your_key_here"
 
 ### 3. Customise overrides (TV script only)
 
-Open `make_tv_links.py` and edit the two dicts near the top:
+Open `make_tv_links.py` and edit the two sections near the top:
 
-**`NAME_OVERRIDES`** — use when the same show's season folders parse to different names,
-or when the parsed name doesn't match TVDB. Run `--dry-run` first and check the
+**`NAME_OVERRIDES`** — use when the same show's season folders match to different names,
+or when the matched name doesn't match TVDB. Run `--dry-run` first and check the
 `[TV SOURCE]` section to see what names are being parsed.
 
 ```python
@@ -276,7 +278,7 @@ ORPHAN_OVERRIDES = {
 ## Recommended workflow
 
 ```bash
-# 1. Dry run both scripts and review output
+# 1. Dry run both scripts and review output in a text file. 
 python3 make_movies_links.py --dry-run >> outputfilemovies.txt
 python3 make_tv_links.py --dry-run >> outputfiletv.txt
 
