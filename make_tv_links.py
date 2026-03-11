@@ -30,7 +30,7 @@ Sources:
     MEDIA_ROOT_CONTAINER = "/data/media"
 
 Features:
-  - Automatically moves a disorganized movies folder setup into a clean jellyfin/arr stack
+  - Automatically moves a disorganized tv folder setup into a clean jellyfin/arr stack
       readable library
         - This will only symlink files, in order to keep seeding from a torrent client
           working without issue.
