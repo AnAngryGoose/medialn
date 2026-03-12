@@ -10,6 +10,7 @@ Two Python scripts that build a clean, Jellyfin/arr stack-compatible symlink tre
 
 **Automatic Media Seperation** - Automatically, accurately seperating TV shows, miniseries, and Movies to correct folders for importing. 
   - Automatic media type matching with TMDB lookup matching, symlinking, and restructuring.
+  
     -Manual TMDB lookup for anything it can't match on its own
 
 **Handles mixed file formats**, naming conventions, folder structures
