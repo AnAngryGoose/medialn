@@ -83,17 +83,17 @@ All hit at least one of these walls for me with a messy existing library:
 ## How it works
 
 ```
-/movies/                            /tv/
+/movies/                            /tv/ 
   Some.Movie.2020.mkv                   Show.Name.S01.720p.../
   Show.Name.S01.720p.../                Show.Name.S02.1080p.../
     ...                                       ...
-
-         -- make_movies_links.py        -- make_tv_links.py
+                                        #  will also scan /movies/ and pull miniseries.
+         -- make_movies_links.py        -- make_tv_links.py 
 
 /movies-linked/                     /tv-linked/
   Some Movie (2020)/                    Show Name/
-    Some Movie (2020).mkv  ──→              Season 01/  ──→ /tv/Show.Name.S01.../
-                                            Season 02/  ──→ /tv/Show.Name.S02.../
+    Some Movie (2020).mkv               Season 01/  --> /tv/Show.Name.S01.../
+                                           Season 02/  --> /tv/Show.Name.S02.../
 ```
 
 All symlink targets are **absolute container-side paths** (e.g. `/data/media/movies/...`),
