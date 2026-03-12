@@ -1,4 +1,4 @@
-# medialinker
+# medialn
 
 Two Python scripts that build a clean, Jellyfin/arr stack-compatible symlink
 tree from a disorganized media library. This will not touch/move the existing files. Doesnt break seeding, doesn't write to existing files, works automatically. 
