@@ -39,6 +39,8 @@ More info on the functions are under the sections below.
 /movies/                              /tv/
   Some.Movie.2020.mkv                   Show.Name.S01.720p.../
   Show.Name.S01.720p.../                Show.Name.S02.1080p.../
+                                      /movies/
+                                        Mini.Series.1080p.../
     ...                                 ...
          ↓ make_movies_links.py              ↓ make_tv_links.py
 
@@ -46,6 +48,7 @@ More info on the functions are under the sections below.
   Some Movie (2020)/                    Show Name/
     Some Movie (2020).mkv                 Season 01/ --> /tv/Show.Name.S01.../
                                           Season 02/  --> /tv/Show.Name.S02.../
+                                          Mini Series/ --> /movies/Mini.Series.1080p.../
 ```
 
 Symlink targets are always **absolute container-side paths** so they resolve correctly inside Docker regardless of working directory or mount structure.
