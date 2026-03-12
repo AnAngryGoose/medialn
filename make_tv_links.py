@@ -1,5 +1,6 @@
+#!/usr/bin/env python3
 """
-make_tv_links.py  [v1.0]
+make_tv_links.py  [v1.1]
 
 Builds a Jellyfin/Sonarr-compatible symlink tree from disorganized TV and
 miniseries folders. Reads from /tv/ and /movies/, writes clean structure
@@ -15,7 +16,7 @@ Output structure:
     Miniseries Title/
       Season 01/
         Miniseries.S01E01.mkv  -> absolute container path (/movies/...)
-        
+
 
 
 Sources:
@@ -24,13 +25,13 @@ Sources:
             correct Jellyfin structure are symlinked as-is (pass-through).
   /movies/  Folders containing 2+ episode files are treated as miniseries
             and symlinked into tv-linked/ — they are NOT moved on disk.
-            
+
   To change mount paths, update only these two constants at the top of the file:
     MEDIA_ROOT_HOST      = "/mnt/storage/data/media"
     MEDIA_ROOT_CONTAINER = "/data/media"
 
 Features:
-  - Automatically moves a disorganized tv folder setup into a clean jellyfin/arr stack
+  - Automatically moves a disorganized movies folder setup into a clean jellyfin/arr stack
       readable library
         - This will only symlink files, in order to keep seeding from a torrent client
           working without issue.
@@ -42,34 +43,34 @@ Features:
                        that the source and destination must be on the same underlying filesystem (same inode table).
                     - On mergerfs, movies/ and movies-linked/ could land on different pool branches, which causes
                       os.link() to fail with EXDEV (cross-device link).
-                      
+
   - Show grouping: bare season folders (Show.S01.quality...) are parsed,
     grouped by show name, and placed under Show Name/Season XX/.
-    
+
   - Pass-through: folders already in correct Jellyfin structure are symlinked
     as-is without renaming.
-        - There is also a detection for something that is passed already and 
+        - There is also a detection for something that is passed already and
           then another season/show is found as a match as well
           - This works for duplicate seasons, as well as name overlaps
             - Duplicate: Show S07 (matched) and Show S07 (passed through)
             - Name overlap: 'The Joy of Painting' and pass-through 'The.Joy.of.Painting.COMPLETE.S01-S31.DVDRip-Mixed'
-          - You'll get a warning about this at end of run. 
-          
+          - You'll get a warning about this at end of run.
+
   - Miniseries detection: folders in /movies/ containing 2+ episode files
     (S01E01, 1x01, Episode.N, NofN) are routed here instead of movies-linked/.
         - Helpful if you download a miniseries from a movie tracker
-          or if you happen to have tv shows and movies in a mixed folder. 
-          
+          or if you happen to have tv shows and movies in a mixed folder.
+
   - Name overrides: hardcoded corrections for known naming inconsistencies
     (e.g. "The Office US" -> "The Office (US)").
-        - Allows you to manually set how you'd want this handled. 
-        
+        - Allows you to manually set how you'd want this handled.
+
   - Orphan overrides: bare "Season N" folders with no show context are mapped
     to their correct show via ORPHAN_OVERRIDES.
-        - Allows for manual setting of an unknown folder with generic naming. 
-        
+        - Allows for manual setting of an unknown folder with generic naming.
+
   - Episode format detection covers: S01E01, 1x01, Episode.N, NofN.
-  
+
   - Various misc stuff:
         - Sample exclusion: word-boundary match (\bsample\b) avoids false positives
              like example.mkv.
@@ -92,7 +93,7 @@ import re
 import argparse
 
 ##################################
-### ----- CONFIG SECTION ----- ### 
+### ----- CONFIG SECTION ----- ###
 ### Manual overrides are below ###
 ##################################
 
@@ -109,7 +110,7 @@ TV_LINKED     = f"{MEDIA_ROOT_HOST}/tv-linked"
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".ts", ".m4v"}
 
 ######################################
-### ----- END CONFIG SECTION ----- ### 
+### ----- END CONFIG SECTION ----- ###
 ######################################
 
 
@@ -119,6 +120,8 @@ RE_XNOTATION = re.compile(r'\d{1,2}x\d{2}', re.IGNORECASE)  # e.g. 1x01, 01x09
 RE_EPISODE   = re.compile(r'[Ee]pisode[. _](\d{1,3})', re.IGNORECASE)
 RE_NOF       = re.compile(r'[\(]?(\d{1,2})of(\d{1,2})[\)]?', re.IGNORECASE)
 RE_SAMPLE    = re.compile(r'\bsample\b', re.IGNORECASE)
+# Bare E01 format (no season prefix) — e.g. Band.Of.Brothers.E01, BBC.Life.E02
+RE_BARE_EPISODE = re.compile(r'(?<![Ss\d])E(\d{2,3})\b')
 
 RE_STRIP = re.compile(
     r'[. ]([Ss]\d{2}([Ee]\d{2})?|'
@@ -151,8 +154,13 @@ RE_ILLEGAL_CHARS = re.compile(r'[/:\\?*"<>|]')
 # Examples:
 #   "The Office US": "The Office (US)",
 #   "Scooby-Doo Where Are You": "Scooby Doo Where Are You",
+
+#    # "3000" is stripped as a number token — override to preserve full title
+#    "Mystery Science Theater":   "Mystery Science Theater 3000",
 NAME_OVERRIDES = {
-    # "Show Name As Parsed": "TVDB Show Name",
+
+#   "The Office US":             "The Office (US)",
+
 }
 
 # ORPHAN_OVERRIDES: map bare "Season N" folders (no show name in the
@@ -160,11 +168,17 @@ NAME_OVERRIDES = {
 # orphans — they appear in [TV PASS-THROUGH] without a parent show name.
 #
 # Format: "folder name on disk" -> ("Show Name", season_number)
-#
-# Example:
-#   "Season 1": ("Some Show", 1),
 ORPHAN_OVERRIDES = {
-    # "Season 1": ("Some Show", 1),
+    # Little Bear — bare Season N folders with no show name in the folder itself
+    #"Season 1": ("Little Bear", 1),
+
+    # Folders using "Season.N" naming instead of "S04" — files inside are
+    # standard S04E01 format so is_bare_episode_folder() won't catch them
+    # "The Blue Planet Season 1": ("The Blue Planet", 1),
+
+    # Planet Earth — folder has no S01 and files use abbreviated "pe.s01e01" prefix
+    # so neither SEASON_RE nor is_bare_episode_folder() can detect it
+    #"Planet.Earth.1080p.BluRay.x264-CULTHD": ("Planet Earth", 1),
 }
 
 #############################
@@ -191,6 +205,19 @@ def sanitize_filename(name):
     return RE_ILLEGAL_CHARS.sub('-', name)
 
 
+def normalize_show_key(name):
+    """
+    Normalize a show name to a stable grouping key.
+    Case-insensitive and apostrophe/punctuation-agnostic so that variants like
+    'Ask The Storybots', 'Ask the StoryBots', "Blue's Clues", 'Blues Clues',
+    "Chef's Table", 'Chefs Table' all resolve to the same group.
+    """
+    name = name.lower()
+    name = re.sub(r"['\u2019`]", '', name)   # strip apostrophes (straight + curly)
+    name = re.sub(r'\s+', ' ', name)          # collapse whitespace
+    return name.strip()
+
+
 def host_to_container(path):
     """Translate a host-side absolute path to its container-side equivalent."""
     return path.replace(MEDIA_ROOT_HOST, MEDIA_ROOT_CONTAINER, 1)
@@ -207,10 +234,32 @@ def episode_info(filename):
     m = RE_EPISODE.search(filename)
     if m:
         return 1, int(m.group(1))
+    m = RE_BARE_EPISODE.search(filename)
+    if m:
+        return 1, int(m.group(1))
     m = RE_NOF.search(filename)
     if m:
         return 1, int(m.group(1))
     return None
+
+
+def is_bare_episode_folder(folder_path):
+    """
+    True if a folder contains 2+ bare E\\d+ episode entries — either:
+    - Direct video files named with bare E\\d+ (e.g. Band.Of.Brothers.E01....mkv)
+    - Subdirectories named with bare E\\d+ (e.g. BBC.Life.E01.../BBC.Frozen.Planet.E02...)
+      where each subdir holds one episode file
+    """
+    count = 0
+    with os.scandir(folder_path) as it:
+        for entry in it:
+            if entry.is_file() and is_video(entry.name) and RE_BARE_EPISODE.search(entry.name):
+                count += 1
+            elif entry.is_dir() and RE_BARE_EPISODE.search(entry.name):
+                count += 1
+            if count >= 2:
+                return True
+    return False
 
 
 def extract_show_and_season(folder_name):
@@ -220,6 +269,7 @@ def extract_show_and_season(folder_name):
     raw_name   = m.group(1)
     season_num = int(m.group(3))
     show_name  = raw_name.replace('.', ' ').strip() if ' ' not in raw_name else raw_name.strip()
+    show_name  = re.sub(r'\s+\d{4}$', '', show_name)   # strip trailing year e.g. "Bluey 2018"
     show_name  = sanitize_filename(NAME_OVERRIDES.get(show_name, show_name))
     return show_name, season_num
 
@@ -280,8 +330,16 @@ def clean_broken_symlinks(directory):
 
 
 def scan_tv_source():
-    grouped     = {}
+    grouped     = {}   # canonical_name -> [(season_num, folder), ...]
+    name_map    = {}   # normalized_key -> canonical display name
     passthrough = []
+
+    def canonical(show_name):
+        """Return the canonical display name for show_name, registering on first use."""
+        key = normalize_show_key(show_name)
+        if key not in name_map:
+            name_map[key] = show_name
+        return name_map[key]
 
     with os.scandir(TV_SOURCE) as it:
         entries = sorted(it, key=lambda e: e.name)
@@ -291,7 +349,7 @@ def scan_tv_source():
 
         if name in ORPHAN_OVERRIDES:
             show_name, season_num = ORPHAN_OVERRIDES[name]
-            grouped.setdefault(show_name, []).append((season_num, name))
+            grouped.setdefault(canonical(show_name), []).append((season_num, name))
             continue
 
         if not entry.is_dir():
@@ -299,7 +357,13 @@ def scan_tv_source():
 
         show_name, season_num = extract_show_and_season(name)
         if show_name:
-            grouped.setdefault(show_name, []).append((season_num, name))
+            grouped.setdefault(canonical(show_name), []).append((season_num, name))
+        elif is_bare_episode_folder(entry.path):
+            # Folder has no S01 in name but contains bare E01-format episode files.
+            # Derive show name from folder name and treat as Season 1.
+            show_name = clean_show_name(name)
+            show_name = sanitize_filename(NAME_OVERRIDES.get(show_name, show_name))
+            grouped.setdefault(canonical(show_name), []).append((1, name))
         else:
             passthrough.append(name)
 

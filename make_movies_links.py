@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 """
-make_movies_links.py  [v1.0]
+make_movies_links.py  [v1.1]
 
 Builds a Jellyfin/Radarr-compatible symlink tree from a disorganized movies
 folder. Reads from /movies/, writes clean structure to /movies-linked/.
@@ -34,7 +33,7 @@ Features:
                       os.link() to fail with EXDEV (cross-device link).
 
     - Episode detection: Skips multi-episode folders (those belong in tv-linked via make_tv_links.py).
-        - Avoids tagging TV shows. 
+        - Avoids tagging TV shows.
         - Helpful for if you downloaded a miniseries from a movie tracker and its gets
           placed in /movies/
         - make_tv_links.py will handle these and move to correct /tv/ folder.
@@ -43,17 +42,17 @@ Features:
         - You can choose to either attempt to match (TMDB API Key needed)
           or just leave it alone as is, and fix manually later
 
-    - Multi-version grouping:  Two or more verisons of the same file are handled as 
-        - Same title+year each get a quality suffix (1080P, 2160P, REMUX, etc.) 
+    - Multi-version grouping:  Two or more verisons of the same file are handled as
+        - Same title+year each get a quality suffix (1080P, 2160P, REMUX, etc.)
           instead of being discarded.
         - In the case of 2 versions with same resolution - it will tag them as
-          " - 1080p.mkv" and "- 1080p.2.mkv" 
+          " - 1080p.mkv" and "- 1080p.2.mkv"
 
     - Year/title matching protection:
         - Year must be preceded by a separator (dot, space, bracket, paren)
         - This will prevent a movie like "1917" being tagged as FROM 1917
             -  Man that'd be a different movie, much darker.
-    
+
     - Various misc stuff:
         - Sample exclusion: word-boundary match (\bsample\b) avoids false positives
              like example.mkv.
@@ -80,7 +79,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ##################################
-### ----- CONFIG SECTION ----- ### 
+### ----- CONFIG SECTION ----- ###
 ##################################
 # Host path prefix and its equivalent inside the Docker container.
 # Symlink targets are written using MEDIA_ROOT_CONTAINER so they resolve
@@ -97,7 +96,7 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".ts", ".m4v"}
 
 ##################################
-### --- END CONFIG SECTION --- ### 
+### --- END CONFIG SECTION --- ###
 ##################################
 
 # Episode detection — folders matching these are miniseries, skip them
@@ -105,6 +104,9 @@ RE_SXXEXX  = re.compile(r'[Ss](\d{1,2})[Ee](\d{2})', re.IGNORECASE)
 RE_XNOTATION = re.compile(r'\d{1,2}x\d{2}', re.IGNORECASE)   # e.g. 1x01, 01x09
 RE_EPISODE = re.compile(r'[Ee]pisode[. _](\d{1,3})', re.IGNORECASE)
 RE_NOF     = re.compile(r'[\(]?(\d{1,2})of(\d{1,2})[\)]?', re.IGNORECASE)
+# Bare E01 format (no season prefix) — e.g. Band.Of.Brothers.E01, BBC.Life.E02
+# Negative lookbehind prevents matching S01E01 (already caught by RE_SXXEXX)
+RE_BARE_EPISODE = re.compile(r'(?<![Ss\d])E(\d{2,3})\b')
 
 # Sample file detection — word-boundary match to avoid false positives like "example.mkv"
 RE_SAMPLE = re.compile(r'\bsample\b', re.IGNORECASE)
@@ -128,7 +130,7 @@ RE_STRIP = re.compile(
     r'HDR\d*|DV|DDP[\d.]*|DD[\+\d.]*|DTS|FLAC[\d.]*|AAC[\d.]*|AC3|Opus|'
     r'x264|x265|H\.264|H\.265|h264|h265|AVC|HEVC|'
     r'REMASTERED|EXTENDED|UNRATED|LIMITED|DOCU|CRITERION|PROPER|'
-    r'[A-Z]{2,}-[A-Z][A-Za-z0-9]+)'
+    r'(?-i:[A-Z]{2,}-[A-Z][A-Za-z0-9]+))'
     r'.*$',
     re.IGNORECASE
 )
@@ -149,7 +151,8 @@ def is_episode(filename):
     return (RE_SXXEXX.search(filename) or
             RE_XNOTATION.search(filename) or
             RE_EPISODE.search(filename) or
-            RE_NOF.search(filename))
+            RE_NOF.search(filename) or
+            RE_BARE_EPISODE.search(filename))
 
 
 def is_miniseries_folder(folder_path):
