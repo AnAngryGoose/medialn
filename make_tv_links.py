@@ -51,7 +51,7 @@ import re
 import argparse
 
 from common import (
-    RE_SXXEXX, RE_BARE_EPISODE, RE_SAMPLE, RE_PART,
+    RE_SXXEXX, RE_BARE_EPISODE, RE_SAMPLE, RE_PART, RE_XNOTATION, RE_EPISODE, RE_NOF,
     is_video, is_sample, sanitize_filename,
     make_symlink, ensure_dir, clean_broken_symlinks,
 )
@@ -64,19 +64,13 @@ MEDIA_ROOT_CONTAINER = "/data/media"               # same path inside Docker
 
 TV_SOURCE     = f"{MEDIA_ROOT_HOST}/tv"
 MOVIES_SOURCE = f"{MEDIA_ROOT_HOST}/movies"
-TV_LINKED     = f"{MEDIA_ROOT_HOST}/tv-linked"
+TV_LINKED     = f"{MEDIA_ROOT_HOST}/tv-linked" # Will create the dir if doesnt exist
 
 # ---------------------------------------------------------------------------
 # Regex patterns (TV-specific)
 # ---------------------------------------------------------------------------
 
 SEASON_RE = re.compile(r'^(.+?)[. ]([Ss])(\d{2})([Ee]\d+.*|[. ].*)$')
-
-# Imported patterns from common: RE_SXXEXX, RE_BARE_EPISODE, RE_SAMPLE, RE_PART
-# These additional episode patterns are used by episode_info()
-RE_XNOTATION = re.compile(r'\d{1,2}x\d{2}', re.IGNORECASE)
-RE_EPISODE   = re.compile(r'[Ee]pisode[. _](\d{1,3})', re.IGNORECASE)
-RE_NOF       = re.compile(r'[\(]?(\d{1,2})of(\d{1,2})[\)]?', re.IGNORECASE)
 
 # Strip quality/codec/release tokens from folder names for title cleaning
 RE_STRIP = re.compile(
