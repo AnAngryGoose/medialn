@@ -208,7 +208,7 @@ def normalize_for_match(name):
     Never used for display or folder creation - comparison only.
     """
     name = name.lower()
-    name = re.sub(r"['\u2019`]s?\b", '', name)                    # apostrophes + possessives
+    name = re.sub(r"['\u2019`]", '', name)                    # apostrophes + possessives
     name = re.sub(r'^(the|a|an)\s+', '', name)                     # leading articles
     name = re.sub(r"^(marvels?|dcs?|disneys?|nbc|bbc)\s+", '', name)  # studio prefixes
     name = re.sub(r'\s+\d{4}$', '', name)                          # trailing years
