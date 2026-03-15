@@ -1,5 +1,5 @@
 """
-common.py
+common.py [v0.23]
 
 Shared utilities for medialn scripts (make_movies_links.py, make_tv_links.py).
 
@@ -102,16 +102,40 @@ def ensure_dir(path, dry_run):
         os.makedirs(path, exist_ok=True)
 
 
-def clean_broken_symlinks(directory):
+def _symlink_target_exists(link_path, host_root, container_root):
+    """Check whether a symlink's target actually exists on disk.
+
+    Symlinks created by medialn use container-side paths (e.g. /data/media/...).
+    When the script runs on the host, those paths don't exist at the container
+    path - they exist at the translated host path. This function reads the
+    symlink target and translates it before checking existence, so container-path
+    symlinks are not incorrectly treated as broken.
+    """
+    if not os.path.islink(link_path):
+        return True
+    target = os.readlink(link_path)
+    if host_root and container_root and target.startswith(container_root):
+        target = host_root + target[len(container_root):]
+    return os.path.exists(target)
+
+
+def clean_broken_symlinks(directory, host_root=None, container_root=None):
     """Remove broken file and directory symlinks, then prune empty directories.
-    Only operates on the directory passed in - never touches source paths."""
+    Only operates on the directory passed in - never touches source paths.
+
+    host_root and container_root are used to translate symlink targets before
+    checking existence. Without these, container-path symlinks (e.g. pointing
+    to /data/media/...) would be incorrectly treated as broken when running on
+    the host where those paths don't exist directly.
+    """
     removed = 0
 
     # Broken file symlinks
     for dirpath, _, filenames in os.walk(directory):
         for fname in filenames:
             fpath = os.path.join(dirpath, fname)
-            if os.path.islink(fpath) and not os.path.exists(fpath):
+            if (os.path.islink(fpath) and
+                    not _symlink_target_exists(fpath, host_root, container_root)):
                 print(f"  [REMOVE] {fpath}")
                 os.remove(fpath)
                 removed += 1
@@ -120,7 +144,8 @@ def clean_broken_symlinks(directory):
     for dirpath, dirnames, _ in os.walk(directory):
         for dname in dirnames:
             dpath = os.path.join(dirpath, dname)
-            if os.path.islink(dpath) and not os.path.exists(dpath):
+            if (os.path.islink(dpath) and
+                    not _symlink_target_exists(dpath, host_root, container_root)):
                 print(f"  [REMOVE] {dpath}")
                 os.remove(dpath)
                 removed += 1

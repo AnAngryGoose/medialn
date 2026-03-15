@@ -246,6 +246,68 @@ Python 3.6+ - stdlib only, no external dependencies.
 ## Changelog
 ---
 
+## v0.23 Changelog
+
+### `common.py`
+
+**`clean_broken_symlinks()` incorrectly treating all medialn symlinks as broken**
+- `os.path.exists()` follows symlinks and checks if the target exists at the literal path
+- medialn writes symlinks using container-side paths (`/data/media/...`) — those paths don't exist on the host (`/mnt/storage/data/media/...`), so every symlink was being treated as broken
+- `--clean` was removing all episode symlinks inside converted real directories, causing empty dirs to be pruned and Pass 1 to recreate them as folder symlinks on rebuild — this is what caused the quality conflict prompt to reappear on re-run
+- New `_symlink_target_exists()` helper added — reads symlink target, translates container path to host path if roots are provided, then checks existence against the translated path
+- `clean_broken_symlinks()` now accepts `host_root` and `container_root` optional parameters and uses `_symlink_target_exists()` for all existence checks
+
+---
+
+### `make_tv_links.py`
+
+**Quality conflict resolution re-prompted on subsequent runs and crashed on confirmation**
+- After a `quality_variant` conflict was resolved (season symlink converted to real dir, variant linked), re-running showed the same prompt again with incorrect message `"Season Season 01 is currently a folder symlink"`
+- Root cause: `scan_tv_bare_files()` detected a quality variant by checking the source folder contents — which always shows different qualities — without checking the actual state of the season directory in `tv-linked/`
+- On confirmation at the re-prompt, `convert_season_symlink_to_real_dir()` called `os.readlink()` against the now-real directory, which is an invalid operation on Linux — `[ERROR] Could not read symlink: Invalid argument`
+- Fix: in the `quality_variant` branch, check whether `season_path` is already a real directory before classifying the conflict
+    - If real dir exists and the variant symlink is already inside it — skip silently
+    - If real dir exists but variant not yet inside it — reroute to `bare_dir_episode` conflict type, which adds the symlink directly without attempting conversion
+- Same fix applied to `missing_episode` branch — identical root cause, same incorrect behavior would occur on re-run after conversion
+
+**`clean_broken_symlinks()` call updated**
+- `clean_broken_symlinks(TV_LINKED)` → `clean_broken_symlinks(TV_LINKED, MEDIA_ROOT_HOST, MEDIA_ROOT_CONTAINER)`
+
+---
+
+### `make_movies_links.py`
+
+**`clean_broken_symlinks()` call updated**
+- `clean_broken_symlinks(MOVIES_LINKED)` → `clean_broken_symlinks(MOVIES_LINKED, MEDIA_ROOT_HOST, MEDIA_ROOT_CONTAINER)`
+
+**Local `RE_QUALITY` and `extract_quality()` removed**
+- Both were defined locally as duplicates of the versions now in `common.py`
+- `RE_QUALITY` local definition removed
+- `extract_quality()` local definition removed
+- `extract_quality` added to the `from common import (...)` block
+
+**Hardcoded TMDB API key removed**
+- Private fork API key was present in the uploaded file — reverted to `os.environ.get("TMDB_API_KEY", "")` for the public version
+
+**Dead variable removed**
+- `raw_entries = []` in `scan_movies()` was assigned but never used — removed
+
+###  TV Script testing
+
+-   **Pass 1 folder grouping** - season folders grouped, named, symlinked correctly
+-   **Pass-through** - already-structured folders symlinked as-is
+-   **Miniseries from /movies/** - correctly detected and routed to tv-linked
+-   **Bare file new show/season** - real dir created, episodes linked, idempotent
+-   **Bare file quality variant** - conflict detected, prompt works, season converted, both qualities coexist, no re-prompt
+-   **Bare file missing episode** - conflict detected, prompt works, season converted, episode added, no re-prompt
+-   **Sonarr hardlink collision** - script skips existing hardlinks, link count intact
+-   **`--clean`** - only removes genuinely broken symlinks, container path translation working correctly, real dirs and their contents preserved
+-   **Idempotency** - re-runs fully silent on already-linked content
+-   **Name resolution** - fuzzy matching working across TMDB/folder parse differences, trailing year stripping working, apostrophe normalization correct
+
+
+
+
 ## v0.22 
 
 ### Bug fix - duplicate show folders from name mismatch between Pass 1 and Pass 2

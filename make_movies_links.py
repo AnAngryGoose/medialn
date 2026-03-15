@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-make_movies_links.py  [v2.0]
+make_movies_links.py  [v0.23]
 
 Builds a Jellyfin/Radarr-ready symlink tree from a messy movies folder.
 Reads from /movies/, writes to /movies-linked/. Original files are never
@@ -48,7 +48,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from common import (
     VIDEO_EXTS, RE_SXXEXX, RE_XNOTATION, RE_EPISODE, RE_NOF,
     RE_BARE_EPISODE, RE_SAMPLE, RE_ILLEGAL_CHARS, RE_PART,
-    is_video, is_sample, is_episode, sanitize_filename,
+    is_video, is_sample, is_episode, sanitize_filename, extract_quality,
     make_symlink, ensure_dir, clean_broken_symlinks,
     find_videos_in_folder, largest_video,
 )
@@ -71,12 +71,6 @@ TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "")
 
 # Year extraction - must be preceded by a separator so "1917" isn't read as a year
 RE_YEAR = re.compile(r'(?<=[.\s\[\(])((?:19|20)\d{2})(?=[.\s\]\)]|$)')
-
-# Quality tag for multi-version naming
-RE_QUALITY = re.compile(
-    r'(2160p|1080p|720p|576p|480p|REMUX|BluRay|BDRip|WEB-DL|WEBRip|HDTV|UHD)',
-    re.IGNORECASE
-)
 
 # Strip everything from first quality/source tag onward (for title cleaning).
 # Release group pattern uses (?-i:...) so hyphenated words like "Half-Blood"
@@ -131,12 +125,6 @@ def extract_year(name):
     """Pull a 4-digit year from a name, requires a preceding separator."""
     m = RE_YEAR.search(name)
     return m.group(1) if m else None
-
-
-def extract_quality(name):
-    """Extract a short quality label (e.g. "1080P") for multi-version naming."""
-    m = RE_QUALITY.search(name)
-    return m.group(1).upper() if m else None
 
 
 def clean_title(name):
@@ -443,7 +431,7 @@ def main(dry_run, clean):
     if clean:
         if os.path.isdir(MOVIES_LINKED):
             print(f"[CLEAN] Removing broken symlinks from {MOVIES_LINKED}...\n")
-            clean_broken_symlinks(MOVIES_LINKED)
+            clean_broken_symlinks(MOVIES_LINKED, MEDIA_ROOT_HOST, MEDIA_ROOT_CONTAINER)
         else:
             print(f"[CLEAN] {MOVIES_LINKED} does not exist, nothing to clean.\n")
 

@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 """
-make_tv_links.py  [v0.22] 
-
- - bare episode vs. folder matching fixes. Fuzzy match improvments. 
- - Bug fix - duplicate show folders from name mismatch between Pass 1 and Pass 2
- - Bug fix - trailing year in filename producing split show folders
- - New function: normalize_for_match()
+make_tv_links.py  [v0.23]
 
 Builds a Jellyfin/Sonarr-ready symlink tree from disorganized TV and
 miniseries folders. Reads from /tv/ and /movies/, writes to /tv-linked/.
@@ -91,7 +86,7 @@ MEDIA_ROOT_CONTAINER = "/data/media"               # same path inside Docker
 
 TV_SOURCE     = f"{MEDIA_ROOT_HOST}/tv"
 MOVIES_SOURCE = f"{MEDIA_ROOT_HOST}/movies"
-TV_LINKED     = f"{MEDIA_ROOT_HOST}/tv-linked-test"
+TV_LINKED     = f"{MEDIA_ROOT_HOST}/tv-linked"
 
 # Get a free API key at https://www.themoviedb.org/settings/api
 # Used for automatic show name resolution on bare episode files.
@@ -127,14 +122,11 @@ RE_STRIP = re.compile(
 # These take priority over TMDB lookups.
 # Format: "parsed name" -> "name you want"
 NAME_OVERRIDES = {
-    "A Pup Named Scooby Doo":    "A Pup Named Scooby-Doo",
-    "A.Pup.Named Scooby-Doo":   "A Pup Named Scooby-Doo",
-    "Scooby Doo Where Are You!": "Scooby Doo Where Are You",
-    "Scooby-Doo Where Are You":  "Scooby Doo Where Are You",
-    "The Office":                "The Office (US)",
-    "The Office US":             "The Office (US)",
+    #"A Pup Named Scooby Doo":    "A Pup Named Scooby-Doo",
+    #"A.Pup.Named Scooby-Doo":   "A Pup Named Scooby-Doo",
+    #"The Office US":             "The Office (US)",
     # "3000" is stripped as a number token — override to preserve full title
-    "Mystery Science Theater":   "Mystery Science Theater 3000",
+    #"Mystery Science Theater":   "Mystery Science Theater 3000",
 }
 
 # ORPHAN_OVERRIDES: map bare "Season N" folders (no show name in the
@@ -144,20 +136,16 @@ NAME_OVERRIDES = {
 # Format: "folder name on disk" -> ("Show Name", season_number)
 ORPHAN_OVERRIDES = {
     # Little Bear — bare Season N folders with no show name in the folder itself
-    "Season 1": ("Little Bear", 1),
-    "Season 2": ("Little Bear", 2),
-    "Season 3": ("Little Bear", 3),
-    "Season 4": ("Little Bear", 4),
-    "Season 5": ("Little Bear", 5),
+    #"Season 1": ("Little Bear", 1),
+    #"Season 2": ("Little Bear", 2),
     # Folders using "Season.N" naming instead of "S04" — files inside are
     # standard S04E01 format so is_bare_episode_folder() won't catch them
-    "Wild.Kratts.Season.4":  ("Wild Kratts", 4),
-    "The Blue Planet Season 1": ("The Blue Planet", 1),
+    #"Wild.Kratts.Season.4":  ("Wild Kratts", 4),
+    #"The Blue Planet Season 1": ("The Blue Planet", 1),
     # Planet Earth — folder has no S01 and files use abbreviated "pe.s01e01" prefix
     # so neither SEASON_RE nor is_bare_episode_folder() can detect it
-    "Planet.Earth.1080p.BluRay.x264-CULTHD": ("Planet Earth", 1),
+    #"Planet.Earth.1080p.BluRay.x264-CULTHD": ("Planet Earth", 1),
 }
-
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +196,7 @@ def normalize_for_match(name):
     Never used for display or folder creation - comparison only.
     """
     name = name.lower()
-    name = re.sub(r"['\u2019`]", '', name)                    # apostrophes + possessives
+    name = re.sub(r"['\u2019`]s?\b", '', name)                    # apostrophes + possessives
     name = re.sub(r'^(the|a|an)\s+', '', name)                     # leading articles
     name = re.sub(r"^(marvels?|dcs?|disneys?|nbc|bbc)\s+", '', name)  # studio prefixes
     name = re.sub(r'\s+\d{4}$', '', name)                          # trailing years
@@ -669,21 +657,60 @@ def scan_tv_bare_files(grouped):
             if exists:
                 if (existing_quality and quality and
                         existing_quality.upper() != quality.upper()):
-                    # Different quality - needs user decision
-                    bare_conflicts.append((
-                        show_name, season_num, episode_num, quality,
-                        entry.path, 'quality_variant',
-                        {'source_folder': source_folder,
-                         'existing_quality': existing_quality}
-                    ))
+                    # Different quality - but first check the actual state of the
+                    # season directory in tv-linked/. If it has already been converted
+                    # to a real directory (from a previous conflict resolution), don't
+                    # try to convert it again - check if the variant symlink already
+                    # exists, and if not route it as a bare_dir_episode instead.
+                    if os.path.isdir(season_path) and not os.path.islink(season_path):
+                        # Season is already a real dir - check if variant already linked
+                        q_suffix      = f" - {quality.upper()}" if quality else ""
+                        expected_stem = (f"{show_name}.S{season_num:02d}"
+                                         f"E{episode_num:02d}{q_suffix}")
+                        already_linked = False
+                        try:
+                            with os.scandir(season_path) as it:
+                                for e in it:
+                                    if (os.path.islink(e.path) and
+                                            os.path.splitext(e.name)[0] == expected_stem):
+                                        already_linked = True
+                                        break
+                        except (PermissionError, FileNotFoundError):
+                            pass
+                        if already_linked:
+                            continue  # Variant already linked - skip silently
+                        # Real dir exists but this variant not yet linked
+                        bare_conflicts.append((
+                            show_name, season_num, episode_num, quality,
+                            entry.path, 'bare_dir_episode', season_path
+                        ))
+                    else:
+                        # Season is still a folder symlink - needs conversion
+                        bare_conflicts.append((
+                            show_name, season_num, episode_num, quality,
+                            entry.path, 'quality_variant',
+                            {'source_folder': source_folder,
+                             'existing_quality': existing_quality}
+                        ))
                 # Same quality already covered by folder symlink - skip silently
             else:
-                # Episode not in source folder at all
-                bare_conflicts.append((
-                    show_name, season_num, episode_num, quality,
-                    entry.path, 'missing_episode',
-                    {'source_folder': source_folder}
-                ))
+                # Episode not in source folder at all - check disk state first.
+                # Season may already have been converted to a real dir on a
+                # previous run, in which case we add directly rather than
+                # trying to convert a symlink that no longer exists.
+                if os.path.isdir(season_path) and not os.path.islink(season_path):
+                    if _find_episode_symlink(season_path, episode_num, season_num):
+                        continue  # Already linked - skip silently
+                    bare_conflicts.append((
+                        show_name, season_num, episode_num, quality,
+                        entry.path, 'bare_dir_episode', season_path
+                    ))
+                else:
+                    bare_conflicts.append((
+                        show_name, season_num, episode_num, quality,
+                        entry.path, 'missing_episode',
+                        {'source_folder': source_folder}
+                    ))
 
     return bare_new, bare_conflicts, bare_unmatched
 
@@ -880,7 +907,7 @@ def main(dry_run, clean):
     if clean:
         if os.path.isdir(TV_LINKED):
             print(f"[CLEAN] Removing broken symlinks from {TV_LINKED}...\n")
-            clean_broken_symlinks(TV_LINKED)
+            clean_broken_symlinks(TV_LINKED, MEDIA_ROOT_HOST, MEDIA_ROOT_CONTAINER)
         else:
             print(f"[CLEAN] {TV_LINKED} does not exist, nothing to clean.\n")
 
