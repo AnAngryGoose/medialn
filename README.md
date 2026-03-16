@@ -6,7 +6,7 @@ Movies, TV shows, and miniseries are automatically separated and correctly restr
 
 The original (seeding) files stay exactly where/how they are.
 
-Can be used as a one-time library importer, ongoing media manager, or both. 
+Can be used as a one-time library importer, ongoing media library manager, or both. 
 
 ```text
 What you have (Messy Source):         What medialnk builds (Clean Symlinks):
