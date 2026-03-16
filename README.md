@@ -1,4 +1,4 @@
-# medialnk
+j# medialnk
 
 Scans your `/movies/` and `/tv/` folders, figures out what's what, and builds a parallel symlink tree organized the way media servers expect. 
 
@@ -39,6 +39,7 @@ Run medialnk, point Jellyfin at the `-linked/` directories, done.
 * **Duplicate Handling:** Prompts you to choose which quality to link when two source folders provide the exact same TV season. (or you can keep both automatically)
 * **TMDB Resolution:** Uses a free TMDB API key to resolve messy names to their canonical forms, 
 falling back safely if confidence in the match is low.
+* **Source File Immutability:** medialnk functionally cannot alter, delete, move, rename or otherwise change the source media files in anyway. It build a separate parallel "working library". 
 
 ---
 
