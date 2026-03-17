@@ -9,7 +9,7 @@
 
 medialnk is a symlink-based media library manager. It creates a clean, organized presentation layer for media servers (Jellyfin, Plex) by building a parallel directory tree of symlinks from disorganized source folders. The source files are never modified, moved, renamed, or deleted.
 
-This is fundamentally different from other media organization tools. Rather than restructuring your existing library, medialnk creates a second layer on top of it. Your original files stay exactly where they are. Your torrent client keeps seeding from the same paths. The symlink layer is what your media server reads. If something goes wrong, you delete the symlink directories and run again. Your actual media was never at risk. 
+This is fundamentally different from other media organization tools. Rather than restructuring your existing library, medialnk creates a second layer on top of it. Your original files stay exactly where they are. Your torrent client keeps seeding from the same paths. The symlink layer is what your media server reads. If something goes wrong, you delete the symlink directories and run again. Your actual media was never at risk.
 
 
 ## The Two-Layer Architecture
@@ -128,6 +128,15 @@ Both pipelines receive a Config object, read from source directories, and write 
 8. Print summary, exit
 ```
 
+### Subcommands
+
+| Command | What it does |
+|---------|-------------|
+| `sync` | Full scan and link run. Accepts `--dry-run`, `--yes`, `--tv-only`, `--movies-only`, `-v/-vv`, `-q` |
+| `clean` | Removes broken symlinks from all output dirs and prunes empty directories |
+| `validate` | Checks config validity, source paths, output dir content, PathGuard configuration |
+| `test-library` | Generates a fake source library under a given path for testing |
+
 ### Two-Pass TV Processing
 
 The TV pipeline processes content in two passes to handle the interaction between folder-based seasons and loose bare files.
@@ -147,6 +156,8 @@ The project's core rule is that source media files are never modified, moved, or
 
 This rule is enforced in code, not by convention. A comment saying "don't write here" doesn't stop a bug from writing there. PathGuard does.
 
+Source files are structurally unreachable by any write path in the codebase. There is no code path that could rename, delete, or overwrite a source file regardless of how it is called. This is a hard architectural guarantee, not a policy.
+
 ### Level 1: PathGuard (Runtime Enforcement)
 
 Every filesystem write operation in the entire codebase flows through one of four guarded functions: `safe_remove()`, `safe_rmdir()`, `safe_makedirs()`, `safe_symlink()`. Each calls `PathGuard.assert_writable()` before the actual OS call.
@@ -156,6 +167,8 @@ The guard maintains two lists: source paths (protected) and output paths (writab
 At `lock()` time, the guard also rejects configurations where an output directory is inside or equal to a source directory.
 
 No other code in the codebase calls `os.remove`, `os.rmdir`, `os.makedirs`, or `os.symlink` directly. The four `safe_*` functions are the only write path.
+
+Note on `safe_symlink`: only the `link_path` (the new symlink being created) is guarded. The symlink target is the source file path, which is read-only. Writing to a path and pointing to a path are different operations. The guard prevents writing the symlink into a source directory; it does not and cannot affect where the symlink points.
 
 ### Level 2: Output Validation (Config Mistake Detection)
 
@@ -221,7 +234,7 @@ The user is warned, shown up to 10 of the offending files, and prompted. The def
 | `safe_remove(path)` | `os.remove()` after `assert_writable()` |
 | `safe_rmdir(path)` | `os.rmdir()` after `assert_writable()` |
 | `safe_makedirs(path)` | `os.makedirs()` after `assert_writable()` |
-| `safe_symlink(target, link_path)` | `os.symlink()`. Only `link_path` guarded. Target can point anywhere. |
+| `safe_symlink(target, link_path)` | `os.symlink()`. Only `link_path` is guarded. Target is the source file path (read reference only). |
 
 #### Detection Functions
 
@@ -261,6 +274,12 @@ The user is warned, shown up to 10 of the offending files, and prompted. The def
 | `find_config(cli_path)` | Searches for config file: CLI path, then `./medialnk.toml`, then `~/.config/medialnk/medialnk.toml`. |
 | `load_config(cli_path)` | Loads TOML, constructs Config. Returns (Config, path). |
 
+Config fields loaded but not yet wired into pipeline logic:
+
+| Field | Config key | Status |
+|-------|-----------|--------|
+| `movie_title_overrides` | `[overrides.movie_titles]` | Loaded from TOML, stored on Config, not applied in movies.py yet |
+
 ---
 
 ### resolver.py (TMDB and Name Resolution)
@@ -270,7 +289,7 @@ The user is warned, shown up to 10 of the offending files, and prompted. The def
 | `_word_overlap(parsed, result)` | Word-set confidence check. Short names: all words + max 1 extra. Long names: 50%+ overlap. |
 | `tmdb_search_tv(name, api_key, confidence, log)` | TMDB TV search. Returns canonical title string or None. Cached per run. |
 | `tmdb_search_movie(title, api_key, confidence, log)` | TMDB movie search. Returns (title, year) tuple or None. Cached per run. |
-| `resolve_tv_name(parsed, overrides, api_key, confidence, log)` | Resolution chain: overrides dict -> TMDB with confidence -> parsed fallback. |
+| `resolve_tv_name(parsed, overrides, api_key, confidence, log)` | Resolution chain: overrides dict, then TMDB with confidence, then parsed fallback. |
 | `clear_cache()` | Clears TMDB result cache. For testing. |
 
 ---
@@ -310,6 +329,8 @@ The user is warned, shown up to 10 of the offending files, and prompted. The def
 | `_norm_key(name)` | Light normalization for Pass 1 grouping: lowercase, strip apostrophes, normalize whitespace. |
 | `_norm_match(name)` | Aggressive normalization for cross-source matching: additionally strips articles, studio prefixes, trailing years, all punctuation. |
 | `_find_match(show, grouped, tv_linked)` | Two-stage lookup: check grouped dict, then scan existing tv-linked/ on disk. Uses `_norm_match`. |
+
+`_norm_key` and `_norm_match` are intentionally separate. Pass 1 grouping uses `_norm_key` (light) so that "Schitt's Creek" and "Schitts Creek" are grouped together without accidentally merging different shows that only differ in articles. Cross-source matching in Pass 2 uses `_norm_match` (aggressive) because bare files and folder names from different releases need to find the same canonical show even with significant surface differences in naming.
 
 #### Episode State
 
@@ -433,9 +454,9 @@ The user is warned, shown up to 10 of the offending files, and prompted. The def
 
 ### High Priority
 
-1. **State tracking file.** JSON in output directories recording what's been linked, from where, when. Enables: orphan detection (source files with no corresponding symlink), change reporting (what's new since last run), faster re-runs (skip unchanged content), `medialnk status` command.
+1. **Movie title overrides.** Config field `movie_title_overrides` is already loaded from `[overrides.movie_titles]` and stored on Config. Not yet consumed by movies.py. Wire it in the same way TV name overrides work.
 
-2. **Movie title overrides.** Same pattern as TV name overrides but for the movies pipeline. Config section exists (`[overrides.movie_titles]`) but not yet wired in.
+2. **State tracking file.** JSON in output directories recording what has been linked, from where, and when. Enables: orphan detection (source files with no corresponding symlink), change reporting (what is new since last run), faster re-runs (skip unchanged content), `medialnk status` command.
 
 3. **Orphan scan.** Walk source directories, check for corresponding symlinks in output. Report source files that nothing points to. Important for library maintenance over time.
 
@@ -481,3 +502,4 @@ The user is warned, shown up to 10 of the offending files, and prompted. The def
 | Subcommands over flat flags | `sync`, `clean`, `validate`, `test-library` are distinct operations with different meanings. Subcommands make the CLI self-documenting and prevent invalid flag combinations. |
 | Config for installation behavior, CLI for run behavior | Paths and API keys don't change between runs. `--dry-run` and `--yes` change by the moment. Separating these prevents config file edits for one-off operations. |
 | Per-run log files at verbose level | Console can be quiet for cron. The log always has the detail for debugging after the fact. Logs become critical for trust and recoverability when the tool runs unattended. |
+| movie_title_overrides loaded but not yet applied | Config infrastructure is in place matching the TV override pattern. Wiring it into movies.py is straightforward when needed. Not wiring it prematurely avoids dead code in the hot path. |
