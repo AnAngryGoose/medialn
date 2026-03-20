@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/AnAngryGoose/medialnk/internal/common"
@@ -58,6 +60,9 @@ func scan(cfg *config.Config) ([]movieEntry, [][]string, []string, [][2]any) {
 			}
 			y := year(name)
 			t := title(name)
+			if override, ok := cfg.MovieTitleOverrides[t]; ok {
+				t = override
+			}
 			q := common.ExtractQuality(name)
 			vp := filepath.Join(cfg.MoviesSource, name)
 			if t == "" {
@@ -93,6 +98,9 @@ func scan(cfg *config.Config) ([]movieEntry, [][]string, []string, [][2]any) {
 				y = year(primary.Name)
 			}
 			t := title(name)
+			if override, ok := cfg.MovieTitleOverrides[t]; ok {
+				t = override
+			}
 			q := common.ExtractQuality(name)
 			if q == "" {
 				q = common.ExtractQuality(primary.Name)
@@ -155,15 +163,11 @@ func resolveVersions(seen map[string][]movieEntry) []movieEntry {
 		}
 	}
 	// Sort by title then year (case-insensitive title).
-	for i := 0; i < len(movies)-1; i++ {
-		for j := i + 1; j < len(movies); j++ {
-			ai := movies[i].title + movies[i].year
-			aj := movies[j].title + movies[j].year
-			if aj < ai {
-				movies[i], movies[j] = movies[j], movies[i]
-			}
-		}
-	}
+	sort.Slice(movies, func(i, j int) bool {
+		ai := strings.ToLower(movies[i].title) + movies[i].year
+		aj := strings.ToLower(movies[j].title) + movies[j].year
+		return ai < aj
+	})
 	return movies
 }
 
@@ -352,7 +356,7 @@ func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log) int 
 				results <- result{e, "", ""}
 				return
 			}
-			found, yr := resolver.SearchMovie(t, cfg.TMDBApiKey, cfg.TMDBConfidence, log)
+			found, yr, _ := resolver.SearchMovie(t, cfg.TMDBApiKey, cfg.TMDBConfidence, log)
 			results <- result{e, found, yr}
 		}(entry)
 	}

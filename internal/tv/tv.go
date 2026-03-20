@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -279,7 +278,11 @@ func convertSeason(show string, snum int, path string, cfg *config.Config, dryRu
 		return false
 	}
 	// Translate container path back to host.
-	src := strings.Replace(target, cfg.ContainerRoot, cfg.HostRoot, 1)
+	if !strings.HasPrefix(target, cfg.ContainerRoot) {
+		log.Normal("    [ERROR] target %s does not start with container root %s", target, cfg.ContainerRoot)
+		return false
+	}
+	src := cfg.HostRoot + target[len(cfg.ContainerRoot):]
 	info, err := os.Stat(src)
 	if err != nil || !info.IsDir() {
 		log.Normal("    [ERROR] target missing: %s", src)
@@ -336,8 +339,12 @@ func convertSeason(show string, snum int, path string, cfg *config.Config, dryRu
 			if _, err := os.Lstat(lp); err == nil {
 				continue // already exists
 			}
-			containerTarget := common.HostToContainer(
+			containerTarget, err := common.HostToContainer(
 				filepath.Join(src, f.Name()), cfg.HostRoot, cfg.ContainerRoot)
+			if err != nil {
+				log.Normal("    [ERROR] %v", err)
+				continue
+			}
 			lpSafe, err := common.NewSafePath(lp, cfg.OutputDirs)
 			if err != nil {
 				continue
@@ -388,6 +395,12 @@ func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]
 		return nil, nil, nil
 	}
 
+	// Scan tv_linked once so findMatch doesn't re-read it for every bare file.
+	var linkedEntries []os.DirEntry
+	if info, err := os.Stat(cfg.TVLinked); err == nil && info.IsDir() {
+		linkedEntries, _ = os.ReadDir(cfg.TVLinked)
+	}
+
 	for _, e := range entries {
 		if !e.Type().IsRegular() || !common.IsVideo(e.Name()) || common.IsSample(e.Name()) {
 			continue
@@ -399,9 +412,10 @@ func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]
 		}
 
 		rawShow := r.Show
-		show := common.Sanitize(resolver.ResolveTVName(
-			rawShow, cfg.TVNameOverrides, cfg.TMDBApiKey, cfg.TMDBConfidence, log))
-		matched := findMatch(show, grouped, cfg.TVLinked)
+		resolved, _ := resolver.ResolveTVName(
+			rawShow, cfg.TVNameOverrides, cfg.TMDBApiKey, cfg.TMDBConfidence, log)
+		show := common.Sanitize(resolved)
+		matched := findMatch(show, grouped, linkedEntries)
 		if matched != "" && matched != show {
 			show = matched
 		}
@@ -832,13 +846,3 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 	}
 }
 
-// resolverLog adapts the tv.Log interface to resolver.Logger.
-type resolverLog struct{ log Log }
-
-func (r resolverLog) Verbose(format string, args ...any) { r.log.Verbose(format, args...) }
-
-// Ensure resolver.Logger is satisfied by resolverLog at compile time.
-var _ interface{ Verbose(string, ...any) } = resolverLog{}
-
-// reTrailingYearTV is used in tv package (imported from parse.go via package scope)
-var _ = regexp.MustCompile // suppress unused import if needed

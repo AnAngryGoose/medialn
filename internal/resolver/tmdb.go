@@ -18,14 +18,22 @@ type Logger interface {
 }
 
 // cache holds TMDB results to avoid duplicate API calls across a run.
+// A nil value means a confirmed miss (no results / confidence fail).
+// Transient request failures are not cached so the next call retries.
 var (
 	cacheMu sync.Mutex
-	cache   = map[string]any{} // value is (string | movieResult | nil)
+	cache   = map[string]any{} // value is (tvResult | movieResult | nil)
 )
+
+type tvResult struct {
+	Title string
+	ID    int
+}
 
 type movieResult struct {
 	Title string
 	Year  string
+	ID    int
 }
 
 // ClearCache resets the global TMDB result cache. Call between test runs.
@@ -50,18 +58,20 @@ func tmdbGet(endpoint string, query string, apiKey string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// SearchTV looks up a TV show name on TMDB and returns the canonical title,
-// or empty string if not found / confidence check fails.
+// SearchTV looks up a TV show name on TMDB and returns the canonical title and
+// TMDB ID, or ("", 0) if not found / confidence check fails.
 // Results are cached; the same query is never sent twice per run.
-func SearchTV(name, apiKey string, confidence bool, log Logger) string {
+// Transient request failures are not cached so the next call retries.
+func SearchTV(name, apiKey string, confidence bool, log Logger) (string, int) {
 	key := "tv:" + name
 	cacheMu.Lock()
 	if v, ok := cache[key]; ok {
 		cacheMu.Unlock()
 		if v == nil {
-			return ""
+			return "", 0
 		}
-		return v.(string)
+		r := v.(tvResult)
+		return r.Title, r.ID
 	}
 	cacheMu.Unlock()
 
@@ -73,47 +83,49 @@ func SearchTV(name, apiKey string, confidence bool, log Logger) string {
 
 	if apiKey == "" || len(name) < 3 {
 		store(nil)
-		return ""
+		return "", 0
 	}
 	body, err := tmdbGet("search/tv", name, apiKey)
 	if err != nil {
-		store(nil)
-		return ""
+		return "", 0 // transient — do not cache
 	}
 	var resp struct {
 		Results []struct {
 			Name string `json:"name"`
+			ID   int    `json:"id"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil || len(resp.Results) == 0 {
 		store(nil)
-		return ""
+		return "", 0
 	}
 	title := common.Sanitize(resp.Results[0].Name)
+	id := resp.Results[0].ID
 	if confidence && !wordOverlap(name, title) {
 		if log != nil {
 			log.Verbose("    [TMDB] Rejected: '%s' -> '%s' (low confidence)", name, title)
 		}
 		store(nil)
-		return ""
+		return "", 0
 	}
-	store(title)
-	return title
+	store(tvResult{Title: title, ID: id})
+	return title, id
 }
 
 // SearchMovie looks up a movie title on TMDB and returns the canonical
-// (title, year) pair, or ("", "") if not found / confidence check fails.
+// (title, year, id) tuple, or ("", "", 0) if not found / confidence check fails.
 // Results are cached per query.
-func SearchMovie(title, apiKey string, confidence bool, log Logger) (string, string) {
+// Transient request failures are not cached so the next call retries.
+func SearchMovie(title, apiKey string, confidence bool, log Logger) (string, string, int) {
 	key := "movie:" + title
 	cacheMu.Lock()
 	if v, ok := cache[key]; ok {
 		cacheMu.Unlock()
 		if v == nil {
-			return "", ""
+			return "", "", 0
 		}
 		mr := v.(movieResult)
-		return mr.Title, mr.Year
+		return mr.Title, mr.Year, mr.ID
 	}
 	cacheMu.Unlock()
 
@@ -125,46 +137,48 @@ func SearchMovie(title, apiKey string, confidence bool, log Logger) (string, str
 
 	if apiKey == "" || len(title) < 4 {
 		store(nil)
-		return "", ""
+		return "", "", 0
 	}
 	body, err := tmdbGet("search/movie", title, apiKey)
 	if err != nil {
-		store(nil)
-		return "", ""
+		return "", "", 0 // transient — do not cache
 	}
 	var resp struct {
 		Results []struct {
 			Title       string `json:"title"`
 			ReleaseDate string `json:"release_date"`
+			ID          int    `json:"id"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil || len(resp.Results) == 0 {
 		store(nil)
-		return "", ""
+		return "", "", 0
 	}
 	found := common.Sanitize(resp.Results[0].Title)
 	year := ""
 	if rd := resp.Results[0].ReleaseDate; len(rd) >= 4 {
 		year = rd[:4]
 	}
+	id := resp.Results[0].ID
 	if confidence && !wordOverlap(title, found) {
 		if log != nil {
 			log.Verbose("    [TMDB] Rejected: '%s' -> '%s' (low confidence)", title, found)
 		}
 		store(nil)
-		return "", ""
+		return "", "", 0
 	}
-	store(movieResult{Title: found, Year: year})
-	return found, year
+	store(movieResult{Title: found, Year: year, ID: id})
+	return found, year, id
 }
 
-// ResolveTVName returns the canonical show name using override → TMDB → parsed fallback.
-func ResolveTVName(parsed string, overrides map[string]string, apiKey string, confidence bool, log Logger) string {
+// ResolveTVName returns the canonical show name and TMDB ID using
+// override → TMDB → parsed fallback. ID is 0 when resolved via override or fallback.
+func ResolveTVName(parsed string, overrides map[string]string, apiKey string, confidence bool, log Logger) (string, int) {
 	if canonical, ok := overrides[parsed]; ok {
-		return canonical
+		return canonical, 0
 	}
-	if canonical := SearchTV(parsed, apiKey, confidence, log); canonical != "" {
-		return canonical
+	if canonical, id := SearchTV(parsed, apiKey, confidence, log); canonical != "" {
+		return canonical, id
 	}
-	return parsed
+	return parsed, 0
 }

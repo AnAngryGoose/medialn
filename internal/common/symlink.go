@@ -11,13 +11,17 @@ import (
 // equivalent by replacing the host root prefix with the container root.
 // This is what gets stored as the symlink target so that links resolve
 // correctly inside Jellyfin/arr containers.
-func HostToContainer(path, hostRoot, containerRoot string) string {
-	return strings.Replace(path, hostRoot, containerRoot, 1)
+// Returns an error if path does not start with hostRoot.
+func HostToContainer(path, hostRoot, containerRoot string) (string, error) {
+	if !strings.HasPrefix(path, hostRoot) {
+		return "", fmt.Errorf("path %s does not start with host root %s", path, hostRoot)
+	}
+	return containerRoot + path[len(hostRoot):], nil
 }
 
 // MakeSymlink creates a symlink at linkPath pointing to targetHostPath
 // (translated to container coordinates). Returns true if the symlink was
-// created, false if it already existed (skip).
+// created, false if it already existed (skip) or an error occurred.
 //
 // linkPath must be a SafePath to enforce that we never write to source dirs.
 // In dry-run mode the symlink is not created but true is still returned to
@@ -31,12 +35,18 @@ func MakeSymlink(linkPath SafePath, targetHostPath string, dryRun bool, hostRoot
 	if dryRun {
 		return true
 	}
-	containerTarget := HostToContainer(targetHostPath, hostRoot, containerRoot)
+	containerTarget, err := HostToContainer(targetHostPath, hostRoot, containerRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] MakeSymlink: %v\n", err)
+		return false
+	}
 	// Ensure parent directory exists.
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] MakeSymlink: mkdir %s: %v\n", filepath.Dir(p), err)
 		return false
 	}
 	if err := Symlink(containerTarget, linkPath); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] MakeSymlink: symlink %s -> %s: %v\n", p, containerTarget, err)
 		return false
 	}
 	return true

@@ -208,21 +208,19 @@ func ParseBareEpisode(filename string) *BareEpisode {
 	return nil
 }
 
-// findMatch finds the canonical show name in grouped or the tv_linked directory
-// that matches the normalized show name. Returns "" if no match.
-func findMatch(show string, grouped map[string][]seasonEntry, tvLinked string) string {
+// findMatch finds the canonical show name in grouped or a pre-scanned list of
+// tv_linked directory entries that matches the normalized show name.
+// Returns "" if no match.
+func findMatch(show string, grouped map[string][]seasonEntry, linkedEntries []os.DirEntry) string {
 	key := normMatch(show)
 	for g := range grouped {
 		if normMatch(g) == key {
 			return g
 		}
 	}
-	if info, err := os.Stat(tvLinked); err == nil && info.IsDir() {
-		entries, _ := os.ReadDir(tvLinked)
-		for _, e := range entries {
-			if e.IsDir() && normMatch(e.Name()) == key {
-				return e.Name()
-			}
+	for _, e := range linkedEntries {
+		if e.IsDir() && normMatch(e.Name()) == key {
+			return e.Name()
 		}
 	}
 	return ""
@@ -235,13 +233,14 @@ func findMatch(show string, grouped map[string][]seasonEntry, tvLinked string) s
 // epInFolder checks if episode (season, ep) exists in the source folder.
 // Returns (found, quality).
 func epInFolder(folder string, episode, season int) (bool, string) {
-	pat := regexp.MustCompile(fmt.Sprintf(`(?i)[Ss]%02d[Ee]%02d`, season, episode))
+	needle := fmt.Sprintf("S%02dE%02d", season, episode)
 	entries, err := os.ReadDir(folder)
 	if err != nil {
 		return false, ""
 	}
 	for _, e := range entries {
-		if e.Type().IsRegular() && common.IsVideo(e.Name()) && pat.MatchString(e.Name()) {
+		if e.Type().IsRegular() && common.IsVideo(e.Name()) &&
+			strings.Contains(strings.ToUpper(e.Name()), needle) {
 			return true, common.ExtractQuality(e.Name())
 		}
 	}
@@ -250,13 +249,14 @@ func epInFolder(folder string, episode, season int) (bool, string) {
 
 // epSymlinkExists checks if a symlink for episode (season, ep) exists in seasonDir.
 func epSymlinkExists(seasonDir string, episode, season int) bool {
-	pat := regexp.MustCompile(fmt.Sprintf(`(?i)[Ss]%02d[Ee]%02d`, season, episode))
+	needle := fmt.Sprintf("S%02dE%02d", season, episode)
 	entries, err := os.ReadDir(seasonDir)
 	if err != nil {
 		return false
 	}
 	for _, e := range entries {
-		if common.IsSymlink(filepath.Join(seasonDir, e.Name())) && pat.MatchString(e.Name()) {
+		if common.IsSymlink(filepath.Join(seasonDir, e.Name())) &&
+			strings.Contains(strings.ToUpper(e.Name()), needle) {
 			return true
 		}
 	}
