@@ -69,3 +69,8 @@ func Remove(path SafePath) error {
 func MkdirAll(path SafePath, perm fs.FileMode) error {
 	return os.MkdirAll(path.path, perm)
 }
+
+// WriteFile writes data to path, like os.WriteFile.
+func WriteFile(path SafePath, data []byte, perm fs.FileMode) error {
+	return os.WriteFile(path.path, data, perm)
+}

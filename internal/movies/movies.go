@@ -11,6 +11,7 @@ import (
 	"github.com/AnAngryGoose/medialnk/internal/common"
 	"github.com/AnAngryGoose/medialnk/internal/config"
 	"github.com/AnAngryGoose/medialnk/internal/resolver"
+	"github.com/AnAngryGoose/medialnk/internal/state"
 )
 
 // Log is the subset of logger methods the movies pipeline uses.
@@ -54,7 +55,7 @@ func scan(cfg *config.Config) ([]movieEntry, [][]string, []string, [][2]any) {
 			if !common.IsVideo(name) || common.IsSample(name) {
 				continue
 			}
-			if common.IsEpisodeFile(name, true) {
+			if common.IsEpisodeFile(name, false) {
 				skipped = append(skipped, name)
 				continue
 			}
@@ -87,7 +88,7 @@ func scan(cfg *config.Config) ([]movieEntry, [][]string, []string, [][2]any) {
 				skipped = append(skipped, name)
 				continue
 			}
-			vids, _ := common.FindVideos(folderPath, true, true)
+			vids, _ := common.FindVideos(folderPath, false, true, true)
 			if len(vids) == 0 {
 				flagged = append(flagged, []string{name, "no video file"})
 				continue
@@ -172,7 +173,7 @@ func resolveVersions(seen map[string][]movieEntry) []movieEntry {
 }
 
 // Run executes the full movies pipeline and returns summary counts.
-func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
+func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) map[string]int {
 	// Ensure output directory exists.
 	mlSafe, err := common.NewSafePath(cfg.MoviesLinked, cfg.OutputDirs)
 	if err != nil {
@@ -219,13 +220,17 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 		}
 		if common.MakeSymlink(linkSafe, m.videoPath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
 			linked++
+			col.RecordMovieLink(m.title, m.year, m.quality, m.videoPath, linkFullPath)
+		} else {
+			col.RecordMovieSkip(m.title, m.year, m.quality, m.videoPath, linkFullPath)
 		}
 	}
 
 	// Flagged entries
 	var noYear []string
 	for _, f := range flagged {
-		log.Verbose("  [FLAG] %s: %s", f[0], f[1])
+		log.Verbose("  [NO LINK] %s: %s", f[0], f[1])
+		col.RecordMovieFlagged(f[0], f[1])
 		if f[1] == "no year found" {
 			noYear = append(noYear, f[0])
 		}
@@ -253,13 +258,13 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 				}
 				if auto {
 					log.Verbose("    [AUTO] %s -> movie", label)
-					routeMovie(entryName, t, y, cfg, dryRun, log)
+					routeMovie(entryName, t, y, cfg, dryRun, log, col)
 				} else {
 					log.Normal("    %s (%d parts)", label, len(parts))
 					fmt.Println("    [1] Movie  [2] TV (skip)  [s] Skip")
 					c := common.PromptChoice("    Choice: ", []string{"1", "2", "s"})
 					if c == "1" {
-						routeMovie(entryName, t, y, cfg, dryRun, log)
+						routeMovie(entryName, t, y, cfg, dryRun, log, col)
 					}
 				}
 			}
@@ -269,7 +274,7 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 	// TMDB resolution for yearless entries
 	tmdbCount := 0
 	if len(noYear) > 0 && cfg.TMDBApiKey != "" && (auto || !dryRun) {
-		tmdbCount = tmdbResolve(noYear, cfg, dryRun, log)
+		tmdbCount = tmdbResolve(noYear, cfg, dryRun, log, col)
 	}
 
 	log.Normal("[MOVIES] %d entries: %d linked, %d flagged, %d skipped, %d ambiguous, %d TMDB resolved",
@@ -285,9 +290,9 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 }
 
 // routeMovie handles an ambiguous Part.N folder confirmed as a movie.
-func routeMovie(entryName, t, y string, cfg *config.Config, dryRun bool, log Log) {
+func routeMovie(entryName, t, y string, cfg *config.Config, dryRun bool, log Log, col *state.Collector) {
 	folderPath := filepath.Join(cfg.MoviesSource, entryName)
-	vids, _ := common.FindVideos(folderPath, false, true)
+	vids, _ := common.FindVideos(folderPath, false, true, true)
 	if len(vids) == 0 {
 		log.Normal("    [FAIL] No video files in %s", entryName)
 		return
@@ -322,16 +327,19 @@ func routeMovie(entryName, t, y string, cfg *config.Config, dryRun bool, log Log
 		return
 	}
 	common.EnsureDir(linkDirSafe, dryRun)
-	linkSafe, err := common.NewSafePath(filepath.Join(linkDirPath, linkName), cfg.OutputDirs)
+	linkFullPath := filepath.Join(linkDirPath, linkName)
+	linkSafe, err := common.NewSafePath(linkFullPath, cfg.OutputDirs)
 	if err != nil {
 		log.Normal("[ERROR] %v", err)
 		return
 	}
-	common.MakeSymlink(linkSafe, primary.Path, dryRun, cfg.HostRoot, cfg.ContainerRoot)
+	if common.MakeSymlink(linkSafe, primary.Path, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+		col.RecordMovieLink(t, y, q, primary.Path, linkFullPath)
+	}
 }
 
 // tmdbResolve runs concurrent TMDB lookups for yearless entries (up to 8 at a time).
-func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log) int {
+func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log, col *state.Collector) int {
 	log.Normal("  [TMDB] Resolving %d yearless entries...", len(noYear))
 
 	type result struct {
@@ -370,6 +378,7 @@ func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log) int 
 	for r := range results {
 		if r.found == "" {
 			log.Verbose("    [MISS] %s", r.entry)
+			col.RecordMovieUnmatched(r.entry)
 			continue
 		}
 		// Determine video path: bare file or folder.
@@ -379,7 +388,7 @@ func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log) int 
 		if err == nil && info.Mode().IsRegular() {
 			vp = ep
 		} else if err == nil && info.IsDir() {
-			vids, _ := common.FindVideos(ep, false, true)
+			vids, _ := common.FindVideos(ep, false, true, true)
 			if len(vids) > 0 {
 				vp = common.LargestVideo(vids).Path
 			}
@@ -400,11 +409,13 @@ func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log) int 
 			continue
 		}
 		common.EnsureDir(linkDirSafe, dryRun)
-		linkSafe, err := common.NewSafePath(filepath.Join(linkDirPath, folderName+ext), cfg.OutputDirs)
+		linkFullPath := filepath.Join(linkDirPath, folderName+ext)
+		linkSafe, err := common.NewSafePath(linkFullPath, cfg.OutputDirs)
 		if err != nil {
 			continue
 		}
 		if common.MakeSymlink(linkSafe, vp, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+			col.RecordMovieLink(r.found, r.yr, "", vp, linkFullPath)
 			count++
 		}
 	}

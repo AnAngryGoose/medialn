@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,7 @@ import (
 	"github.com/AnAngryGoose/medialnk/internal/config"
 	"github.com/AnAngryGoose/medialnk/internal/logger"
 	"github.com/AnAngryGoose/medialnk/internal/movies"
+	"github.com/AnAngryGoose/medialnk/internal/state"
 	"github.com/AnAngryGoose/medialnk/internal/tv"
 )
 
@@ -103,11 +105,33 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	col := state.New()
+
 	if !syncTVOnly {
-		movies.Run(cfg, syncDryRun, syncYes, log)
+		movies.Run(cfg, syncDryRun, syncYes, log, col)
 	}
 	if !syncMoviesOnly {
-		tv.Run(cfg, syncDryRun, syncYes, log)
+		tv.Run(cfg, syncDryRun, syncYes, log, col)
+	}
+
+	// Write state files (skip in dry-run).
+	if !syncDryRun {
+		if !syncTVOnly {
+			if sp, err := common.NewSafePath(
+				filepath.Join(cfg.MoviesLinked, ".medialnk-state.json"), cfg.OutputDirs); err == nil {
+				if err := col.WriteMovies(sp, Version); err != nil {
+					log.Normal("[WARN] movies state: %v", err)
+				}
+			}
+		}
+		if !syncMoviesOnly {
+			if sp, err := common.NewSafePath(
+				filepath.Join(cfg.TVLinked, ".medialnk-state.json"), cfg.OutputDirs); err == nil {
+				if err := col.WriteTV(sp, Version); err != nil {
+					log.Normal("[WARN] tv state: %v", err)
+				}
+			}
+		}
 	}
 
 	log.Normal("")

@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "2.0.0"
+const Version = "2.1.1"
 
 // cfgPath is the global --config flag value, shared across all commands.
 var cfgPath string

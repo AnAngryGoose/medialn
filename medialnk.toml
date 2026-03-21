@@ -27,7 +27,7 @@ confidence_check = true
 
 [logging]
 # Per-run log directory. Relative to media_root_host or absolute.
-log_dir = "/logs"
+log_dir = "/opt/medialnk/medialnk/logs"
 
 # Console verbosity: quiet, normal, verbose, debug
 # Override with -q, -v, -vv flags.

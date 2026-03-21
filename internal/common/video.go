@@ -34,10 +34,11 @@ type VideoEntry struct {
 	Size int64
 }
 
-// FindVideos returns video files directly in folder (non-recursive).
-// If excludeEpisodes is true, files with episode notation are skipped.
+// FindVideos returns video files in folder.
+// When recursive is true, subdirectories are searched as well.
+// If excludeEpisodes is true, files with episode notation (SxxExx only) are skipped.
 // If excludeSamples is true, files matching the sample pattern are skipped.
-func FindVideos(folder string, excludeEpisodes, excludeSamples bool) ([]VideoEntry, error) {
+func FindVideos(folder string, excludeEpisodes, excludeSamples, recursive bool) ([]VideoEntry, error) {
 	entries, err := os.ReadDir(folder)
 	if err != nil {
 		return nil, err
@@ -45,6 +46,10 @@ func FindVideos(folder string, excludeEpisodes, excludeSamples bool) ([]VideoEnt
 	var out []VideoEntry
 	for _, e := range entries {
 		if e.IsDir() {
+			if recursive {
+				sub, _ := FindVideos(filepath.Join(folder, e.Name()), excludeEpisodes, excludeSamples, true)
+				out = append(out, sub...)
+			}
 			continue
 		}
 		name := e.Name()

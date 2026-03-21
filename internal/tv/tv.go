@@ -11,6 +11,7 @@ import (
 	"github.com/AnAngryGoose/medialnk/internal/common"
 	"github.com/AnAngryGoose/medialnk/internal/config"
 	"github.com/AnAngryGoose/medialnk/internal/resolver"
+	"github.com/AnAngryGoose/medialnk/internal/state"
 )
 
 // Log is the subset of logger methods the TV pipeline uses.
@@ -271,7 +272,7 @@ func resolveDupes(show string, seasons []seasonEntry, dryRun, auto bool, log Log
 // re-linking all episodes from the source folder individually.
 // This is required when individual episode symlinks need to coexist
 // with a season that was previously symlinked as a whole folder.
-func convertSeason(show string, snum int, path string, cfg *config.Config, dryRun bool, log Log) bool {
+func convertSeason(show string, snum int, path string, cfg *config.Config, dryRun bool, log Log, col *state.Collector) bool {
 	target, err := os.Readlink(path)
 	if err != nil {
 		log.Normal("    [ERROR] readlink %s: %v", path, err)
@@ -324,7 +325,8 @@ func convertSeason(show string, snum int, path string, cfg *config.Config, dryRu
 	for _, f := range files {
 		ext := filepath.Ext(f.Name())
 		var linkName string
-		if ep := ParseBareEpisode(f.Name()); ep != nil {
+		ep := ParseBareEpisode(f.Name())
+		if ep != nil {
 			q := ep.Quality
 			if q == "" {
 				q = folderQ
@@ -349,7 +351,14 @@ func convertSeason(show string, snum int, path string, cfg *config.Config, dryRu
 			if err != nil {
 				continue
 			}
-			common.Symlink(containerTarget, lpSafe)
+			if err := common.Symlink(containerTarget, lpSafe); err == nil && ep != nil {
+				var sep *int
+				if ep.SecondEp >= 0 {
+					v := ep.SecondEp
+					sep = &v
+				}
+				col.RecordTVEpisodeLink(show, ep.Season, ep.Episode, sep, ep.Quality, filepath.Join(src, f.Name()), lp)
+			}
 		}
 	}
 	return true
@@ -517,7 +526,7 @@ func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]
 	return newEps, conflicts, unmatched
 }
 
-func handleNew(newEps []bareNew, cfg *config.Config, dryRun bool, log Log) int {
+func handleNew(newEps []bareNew, cfg *config.Config, dryRun bool, log Log, col *state.Collector) int {
 	if len(newEps) == 0 {
 		return 0
 	}
@@ -570,6 +579,12 @@ func handleNew(newEps []bareNew, cfg *config.Config, dryRun bool, log Log) int {
 			}
 			if common.MakeSymlink(lpSafe, ep.filePath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
 				log.Verbose("    [LINK] %s", ln)
+				var sep *int
+				if ep.secondEp >= 0 {
+					v := ep.secondEp
+					sep = &v
+				}
+				col.RecordTVEpisodeLink(ep.show, ep.season, ep.episode, sep, ep.quality, ep.filePath, lp)
 				count++
 			}
 		}
@@ -577,7 +592,7 @@ func handleNew(newEps []bareNew, cfg *config.Config, dryRun bool, log Log) int {
 	return count
 }
 
-func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto bool, log Log) int {
+func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) int {
 	if len(conflicts) == 0 {
 		return 0
 	}
@@ -614,6 +629,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto 
 					continue
 				}
 				if common.MakeSymlink(lpSafe, c.filePath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+					col.RecordTVEpisodeLink(c.show, c.season, c.episode, secondEpPtr(c.secondEp), c.quality, c.filePath, lp)
 					resolved++
 				}
 				continue
@@ -633,13 +649,14 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto 
 					continue
 				}
 			}
-			if convertSeason(c.show, c.season, sp, cfg, dryRun, log) {
+			if convertSeason(c.show, c.season, sp, cfg, dryRun, log, col) {
 				lp := filepath.Join(sp, ln)
 				lpSafe, err := common.NewSafePath(lp, cfg.OutputDirs)
 				if err != nil {
 					continue
 				}
 				if common.MakeSymlink(lpSafe, c.filePath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+					col.RecordTVEpisodeLink(c.show, c.season, c.episode, secondEpPtr(c.secondEp), c.quality, c.filePath, lp)
 					resolved++
 				}
 			}
@@ -652,6 +669,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto 
 					continue
 				}
 				if common.MakeSymlink(lpSafe, c.filePath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+					col.RecordTVEpisodeLink(c.show, c.season, c.episode, secondEpPtr(c.secondEp), c.quality, c.filePath, lp)
 					resolved++
 				}
 			} else {
@@ -665,6 +683,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto 
 						continue
 					}
 					if common.MakeSymlink(lpSafe, c.filePath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+						col.RecordTVEpisodeLink(c.show, c.season, c.episode, secondEpPtr(c.secondEp), c.quality, c.filePath, lp)
 						resolved++
 					}
 				}
@@ -704,12 +723,20 @@ func warnings(grouped map[string][]seasonEntry, pt []string) []string {
 	return w
 }
 
+// secondEpPtr converts the int sentinel (-1 = single episode) to *int for state recording.
+func secondEpPtr(v int) *int {
+	if v < 0 {
+		return nil
+	}
+	return &v
+}
+
 // ---------------------------------------------------------------------------
 // Main pipeline
 // ---------------------------------------------------------------------------
 
 // Run executes the full two-pass TV pipeline and returns summary counts.
-func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
+func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) map[string]int {
 	tvSafe, err := common.NewSafePath(cfg.TVLinked, cfg.OutputDirs)
 	if err != nil {
 		log.Normal("[ERROR] tv_linked is not a registered output: %v", err)
@@ -757,7 +784,10 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 				continue
 			}
 			if common.MakeSymlink(lpSafe, tgt, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+				col.RecordTVSeasonLink(show, s.season, tgt, lp)
 				seasonsLinked++
+			} else {
+				col.RecordTVSeasonSkip(show, s.season, tgt, lp)
 			}
 		}
 	}
@@ -811,6 +841,7 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 				continue
 			}
 			if common.MakeSymlink(lpSafe, op, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+				col.RecordTVEpisodeLink(show, ep.season, ep.episode, nil, "", op, lp)
 				miniCount++
 			}
 		}
@@ -818,8 +849,9 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log) map[string]int {
 
 	// Pass 2: bare episode files.
 	newEps, conflicts, unmatched := scanBare(grouped, cfg, log)
-	newCount := handleNew(newEps, cfg, dryRun, log)
-	conflictCount := handleConflicts(conflicts, cfg, dryRun, auto, log)
+	newCount := handleNew(newEps, cfg, dryRun, log, col)
+	conflictCount := handleConflicts(conflicts, cfg, dryRun, auto, log, col)
+	col.RecordTVUnmatched(unmatched)
 
 	if len(unmatched) > 0 {
 		log.Normal("  [UNMATCHED] %d bare file(s):", len(unmatched))
