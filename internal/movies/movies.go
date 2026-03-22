@@ -23,99 +23,116 @@ type Log interface {
 
 // movieEntry is an internal categorized movie entry.
 type movieEntry struct {
-	sourceName string // original dir/file name in movies_source
+	sourceName string // original dir/file name in source directory
+	sourceDir  string // absolute path of the source directory
 	title      string
 	year       string
 	videoPath  string // absolute host path of the primary video file
 	quality    string // may be empty for single-version movies
 }
 
-// scan categorizes movies_source entries.
+// flaggedItem is a source entry that couldn't be parsed.
+type flaggedItem struct {
+	name      string
+	reason    string
+	sourceDir string
+}
+
+// ambiguousItem is a Part.N folder needing manual routing.
+type ambiguousItem struct {
+	name      string
+	parts     []string
+	sourceDir string
+}
+
+// scan categorizes entries across all movie source directories.
 // Returns (movies, flagged, skipped, ambiguous).
 // - movies: resolved entries ready for linking
-// - flagged: entries that couldn't be parsed (name, reason)
+// - flagged: entries that couldn't be parsed
 // - skipped: miniseries entry names
-// - ambiguous: Part.N folders (name, part files)
-func scan(cfg *config.Config) ([]movieEntry, [][]string, []string, [][2]any) {
-	entries, err := os.ReadDir(cfg.MoviesSource)
-	if err != nil {
-		return nil, nil, nil, nil
-	}
-	// sort is guaranteed by os.ReadDir
+// - ambiguous: Part.N folders
+func scan(cfg *config.Config) ([]movieEntry, []flaggedItem, []string, []ambiguousItem) {
 	seen := map[string][]movieEntry{}
-	var flagged [][]string   // each: [name, reason]
+	var flagged []flaggedItem
 	var skipped []string
-	var ambiguous [][2]any   // each: [name string, parts []string]
+	var ambiguous []ambiguousItem
 
-	for _, e := range entries {
-		name := e.Name()
+	for _, srcDir := range cfg.MoviesSources {
+		entries, err := os.ReadDir(srcDir)
+		if err != nil {
+			continue
+		}
 
-		if e.Type().IsRegular() {
-			// Bare file in movies_source
-			if !common.IsVideo(name) || common.IsSample(name) {
-				continue
-			}
-			if common.IsEpisodeFile(name, false) {
-				skipped = append(skipped, name)
-				continue
-			}
-			y := year(name)
-			t := title(name)
-			if override, ok := cfg.MovieTitleOverrides[t]; ok {
-				t = override
-			}
-			q := common.ExtractQuality(name)
-			vp := filepath.Join(cfg.MoviesSource, name)
-			if t == "" {
-				flagged = append(flagged, []string{name, "no title parsed"})
-				continue
-			}
-			if y == "" {
-				flagged = append(flagged, []string{name, "no year found"})
-				continue
-			}
-			key := fmt.Sprintf("%s (%s)", t, y)
-			seen[key] = append(seen[key], movieEntry{name, t, y, vp, q})
+		for _, e := range entries {
+			name := e.Name()
 
-		} else if e.IsDir() {
-			folderPath := filepath.Join(cfg.MoviesSource, name)
-			ambig, parts := isAmbiguousParts(folderPath)
-			if ambig {
-				ambiguous = append(ambiguous, [2]any{name, parts})
-				continue
+			if e.Type().IsRegular() {
+				// Bare file in source directory.
+				if !common.IsVideo(name) || common.IsSample(name) {
+					continue
+				}
+				if common.IsEpisodeFile(name, false) {
+					skipped = append(skipped, name)
+					continue
+				}
+				y := year(name)
+				t := title(name)
+				if override, ok := cfg.MovieTitleOverrides[t]; ok {
+					t = override
+				}
+				q := common.ExtractQuality(name)
+				vp := filepath.Join(srcDir, name)
+				if t == "" {
+					flagged = append(flagged, flaggedItem{name, "no title parsed", srcDir})
+					continue
+				}
+				if y == "" {
+					flagged = append(flagged, flaggedItem{name, "no year found", srcDir})
+					continue
+				}
+				key := fmt.Sprintf("%s (%s)", t, y)
+				seen[key] = append(seen[key], movieEntry{name, srcDir, t, y, vp, q})
+
+			} else if e.IsDir() {
+				folderPath := filepath.Join(srcDir, name)
+				if isMiniseries(folderPath) {
+					skipped = append(skipped, name)
+					continue
+				}
+				ambig, parts := isAmbiguousParts(folderPath)
+				if ambig {
+					ambiguous = append(ambiguous, ambiguousItem{name, parts, srcDir})
+					continue
+				}
+				vids, _ := common.FindVideos(folderPath, false, true, true)
+				if len(vids) == 0 {
+					flagged = append(flagged, flaggedItem{name, "no video file", srcDir})
+					continue
+				}
+				primary := common.LargestVideo(vids)
+				y := year(name)
+				if y == "" {
+					y = year(primary.Name)
+				}
+				t := title(name)
+				if override, ok := cfg.MovieTitleOverrides[t]; ok {
+					t = override
+				}
+				q := common.ExtractQuality(name)
+				if q == "" {
+					q = common.ExtractQuality(primary.Name)
+				}
+				if t == "" {
+					flagged = append(flagged, flaggedItem{name, "no title parsed", srcDir})
+					continue
+				}
+				if y == "" {
+					flagged = append(flagged, flaggedItem{name, "no year found", srcDir})
+					continue
+				}
+				key := fmt.Sprintf("%s (%s)", t, y)
+				seen[key] = append(seen[key], movieEntry{name, srcDir, t, y, primary.Path, q})
 			}
-			if isMiniseries(folderPath) {
-				skipped = append(skipped, name)
-				continue
-			}
-			vids, _ := common.FindVideos(folderPath, false, true, true)
-			if len(vids) == 0 {
-				flagged = append(flagged, []string{name, "no video file"})
-				continue
-			}
-			primary := common.LargestVideo(vids)
-			y := year(name)
-			if y == "" {
-				y = year(primary.Name)
-			}
-			t := title(name)
-			if override, ok := cfg.MovieTitleOverrides[t]; ok {
-				t = override
-			}
-			q := common.ExtractQuality(name)
-			if q == "" {
-				q = common.ExtractQuality(primary.Name)
-			}
-			if t == "" {
-				flagged = append(flagged, []string{name, "no title parsed"})
-				continue
-			}
-			if y == "" {
-				flagged = append(flagged, []string{name, "no year found"})
-				continue
-			}
-			key := fmt.Sprintf("%s (%s)", t, y)
-			seen[key] = append(seen[key], movieEntry{name, t, y, primary.Path, q})
 		}
 	}
 
@@ -227,12 +244,12 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 	}
 
 	// Flagged entries
-	var noYear []string
+	var noYear []flaggedItem
 	for _, f := range flagged {
-		log.Verbose("  [NO LINK] %s: %s", f[0], f[1])
-		col.RecordMovieFlagged(f[0], f[1])
-		if f[1] == "no year found" {
-			noYear = append(noYear, f[0])
+		log.Verbose("  [NO LINK] %s: %s", f.name, f.reason)
+		col.RecordMovieFlagged(f.name, f.reason)
+		if f.reason == "no year found" {
+			noYear = append(noYear, f)
 		}
 	}
 
@@ -246,30 +263,32 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 		log.Normal("  [AMBIGUOUS] %d Part.N folders", len(ambiguous))
 		if !dryRun {
 			for _, a := range ambiguous {
-				entryName := a[0].(string)
-				parts := a[1].([]string)
-				t := title(entryName)
-				y := year(entryName)
+				t := title(a.name)
+				y := year(a.name)
 				var label string
 				if y != "" {
 					label = fmt.Sprintf("%s (%s)", t, y)
 				} else {
 					label = t
 				}
-				if nonInteractive {
-					log.Normal("    [WATCH] Skipped ambiguous Part.N: %s", label)
-					col.RecordMovieFlagged(entryName, "ambiguous Part.N, needs manual review")
+				if nonInteractive || cfg.PolicyPartN == "skip" {
+					if nonInteractive {
+						log.Normal("    [WATCH] Skipped ambiguous Part.N: %s", label)
+					} else {
+						log.Normal("    [SKIP] Ambiguous Part.N: %s (policy: skip)", label)
+					}
+					col.RecordMovieFlagged(a.name, "ambiguous Part.N, needs manual review")
 					continue
 				}
 				if auto {
 					log.Verbose("    [AUTO] %s -> movie", label)
-					routeMovie(entryName, t, y, cfg, dryRun, log, col)
+					routeMovie(a.name, t, y, a.sourceDir, cfg, dryRun, log, col)
 				} else {
-					log.Normal("    %s (%d parts)", label, len(parts))
+					log.Normal("    %s (%d parts)", label, len(a.parts))
 					fmt.Println("    [1] Movie  [2] TV (skip)  [s] Skip")
 					c := common.PromptChoice("    Choice: ", []string{"1", "2", "s"})
 					if c == "1" {
-						routeMovie(entryName, t, y, cfg, dryRun, log, col)
+						routeMovie(a.name, t, y, a.sourceDir, cfg, dryRun, log, col)
 					}
 				}
 			}
@@ -295,8 +314,8 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 }
 
 // routeMovie handles an ambiguous Part.N folder confirmed as a movie.
-func routeMovie(entryName, t, y string, cfg *config.Config, dryRun bool, log Log, col *state.Collector) {
-	folderPath := filepath.Join(cfg.MoviesSource, entryName)
+func routeMovie(entryName, t, y, sourceDir string, cfg *config.Config, dryRun bool, log Log, col *state.Collector) {
+	folderPath := filepath.Join(sourceDir, entryName)
 	vids, _ := common.FindVideos(folderPath, false, true, true)
 	if len(vids) == 0 {
 		log.Normal("    [FAIL] No video files in %s", entryName)
@@ -344,34 +363,35 @@ func routeMovie(entryName, t, y string, cfg *config.Config, dryRun bool, log Log
 }
 
 // tmdbResolve runs concurrent TMDB lookups for yearless entries (up to 8 at a time).
-func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log, col *state.Collector) int {
+func tmdbResolve(noYear []flaggedItem, cfg *config.Config, dryRun bool, log Log, col *state.Collector) int {
 	log.Normal("  [TMDB] Resolving %d yearless entries...", len(noYear))
 
 	type result struct {
-		entry string
-		found string
-		yr    string
+		entry     string
+		sourceDir string
+		found     string
+		yr        string
 	}
 
 	sem := make(chan struct{}, 8)
 	results := make(chan result, len(noYear))
 	var wg sync.WaitGroup
 
-	for _, entry := range noYear {
+	for _, item := range noYear {
 		wg.Add(1)
-		go func(e string) {
+		go func(e, sd string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			t := title(e)
 			if t == "" || len(t) < 4 {
-				results <- result{e, "", ""}
+				results <- result{e, sd, "", ""}
 				return
 			}
 			found, yr, _ := resolver.SearchMovie(t, cfg.TMDBApiKey, cfg.TMDBConfidence, log)
-			results <- result{e, found, yr}
-		}(entry)
+			results <- result{e, sd, found, yr}
+		}(item.name, item.sourceDir)
 	}
 
 	go func() {
@@ -382,12 +402,51 @@ func tmdbResolve(noYear []string, cfg *config.Config, dryRun bool, log Log, col 
 	count := 0
 	for r := range results {
 		if r.found == "" {
-			log.Verbose("    [MISS] %s", r.entry)
-			col.RecordMovieUnmatched(r.entry)
+			// TMDB miss — link with parsed name as fallback.
+			t := title(r.entry)
+			if t == "" || len(t) < 4 {
+				log.Verbose("    [MISS] %s (no usable title)", r.entry)
+				col.RecordMovieUnmatched(r.entry)
+				continue
+			}
+			ep := filepath.Join(r.sourceDir, r.entry)
+			var vp string
+			info, err := os.Stat(ep)
+			if err == nil && info.Mode().IsRegular() {
+				vp = ep
+			} else if err == nil && info.IsDir() {
+				vids, _ := common.FindVideos(ep, false, true, true)
+				if len(vids) > 0 {
+					vp = common.LargestVideo(vids).Path
+				}
+			}
+			if vp == "" {
+				col.RecordMovieUnmatched(r.entry)
+				continue
+			}
+			ext := filepath.Ext(vp)
+			linkDirPath := filepath.Join(cfg.MoviesLinked, t)
+			linkDirSafe, err := common.NewSafePath(linkDirPath, cfg.OutputDirs)
+			if err != nil {
+				col.RecordMovieUnmatched(r.entry)
+				continue
+			}
+			common.EnsureDir(linkDirSafe, dryRun)
+			linkFullPath := filepath.Join(linkDirPath, t+ext)
+			linkSafe, err := common.NewSafePath(linkFullPath, cfg.OutputDirs)
+			if err != nil {
+				col.RecordMovieUnmatched(r.entry)
+				continue
+			}
+			if common.MakeSymlink(linkSafe, vp, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+				col.RecordMovieLinkUnverified(t, "", "", vp, linkFullPath)
+				log.Verbose("    [TMDB] %s -> linked as '%s' (unverified)", r.entry, t)
+				count++
+			}
 			continue
 		}
 		// Determine video path: bare file or folder.
-		ep := filepath.Join(cfg.MoviesSource, r.entry)
+		ep := filepath.Join(r.sourceDir, r.entry)
 		var vp string
 		info, err := os.Stat(ep)
 		if err == nil && info.Mode().IsRegular() {

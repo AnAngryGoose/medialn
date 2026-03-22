@@ -2,6 +2,109 @@
 
 ---
 
+## [2.9.0] — 2026-03-22
+
+### Phase 2.9: Core Stability
+
+The core sync path now runs fully unattended. No prompt blocks, clear summary output, TMDB failure resilience, interactive config generation, and multiple source directory support. This release closes the gap between "works interactively" and "runs hands-off as infrastructure."
+
+### Non-blocking prompt defaults (2.9.1)
+
+Every interactive prompt that previously blocked the pipeline waiting for human input now has a sensible non-interactive default. A plain `medialnk sync` without a terminal completes without hanging.
+
+**New `[policy]` config section:**
+```toml
+[policy]
+part_n              = "skip"      # skip | prompt  (default: skip)
+duplicate_season    = "skip"      # skip | prompt | highest  (default: skip)
+conflict_conversion = "auto"      # auto | prompt  (default: auto)
+```
+
+**Terminal detection:** `common.IsTerminal()` checks `os.Stdin.Stat()` for `ModeCharDevice`. `cmd/sync.go` derives `nonInteractive` from this — when stdin is not a terminal, all prompts are skipped regardless of policy settings.
+
+**Prompt sites converted:**
+
+| Site | Non-interactive behavior | Policy override |
+|------|-------------------------|-----------------|
+| Movies Part.N ambiguity | Skip, log `[WATCH]`, flag for review | `part_n = "prompt"` |
+| TV duplicate seasons | Pick first source folder | `duplicate_season = "highest"` or `"prompt"` |
+| TV quality/missing conflict | Skip, log `[WATCH]` | `conflict_conversion = "prompt"` |
+| TV bare_dir conflict | Auto-add | (always auto when non-interactive) |
+
+**TV `resolveDupes()` rewrite:** Now accepts `cfg *config.Config` parameter. Policy-driven: "skip" picks first, "highest" uses `qualityRank()` helper to select best quality, "prompt" asks interactively. Added `qualityRank()` mapping common quality tags to numeric ranks.
+
+### Sync summary (2.9.2)
+
+Every sync run now ends with a summary printed via `log.Quiet()` (always visible regardless of verbosity). Uses the state `Collector.Summary()` method to aggregate counts from both pipelines.
+
+```
+medialnk sync summary
+  Linked:      847  (movies: 312, tv: 535)
+  Skipped:      12  (already existed)
+  Flagged:       3
+  Unverified:    1  (linked with parsed name, TMDB pending)
+  Unmatched:     2
+```
+
+**New state types:** `SummaryData` struct and `Collector.Summary()` method in `internal/state/state.go`.
+
+### TMDB failure fallback (2.9.3)
+
+Movies with no year that fail TMDB lookup are no longer left unlinked. Instead, they are linked using the best-effort parsed title and flagged as `tmdb_unverified` in state. The sync summary shows these entries distinctly.
+
+**New state method:** `RecordMovieLinkUnverified()` — records a movie link with `TMDBUnverified: true` flag.
+
+**`tmdbResolve()` change:** On TMDB miss, finds the video file, links it under the parsed title directory, and records as unverified instead of recording as unmatched.
+
+### Part.N ambiguity fix
+
+**Ordering fix in movies `scan()`:** `isMiniseries()` now runs before `isAmbiguousParts()`. Previously, Part.N-only folders hit the ambiguity check first and never reached the miniseries check, causing false positives.
+
+**TV `scanMiniseries()` fix:** Changed `EpisodeInfo(f.Name(), false)` to `EpisodeInfo(f.Name(), true)` so Part.N files in miniseries folders are correctly detected as episodes.
+
+### `medialnk init` (2.9.4)
+
+New interactive config generator. Asks for media root, auto-detects `movies/` and `tv/` subdirectories, prompts for output location and optional TMDB key, writes a working `medialnk.toml`.
+
+**New file:** `cmd/init.go`
+
+### Multiple source directories (2.9.5)
+
+Config now supports multiple source directories per pipeline:
+
+```toml
+[paths]
+movies_source = ["movies", "movies-archive", "/mnt/external/movies"]
+tv_source = ["tv", "tv-old"]
+```
+
+Single string values continue to work for backward compatibility.
+
+**Config changes:**
+- `rawPaths.MoviesSource` / `TVSource` changed from `string` to `interface{}` for TOML polymorphism
+- `Config.MoviesSources []string` / `TVSources []string` (renamed from singular)
+- New `resolveMulti()` helper handles both string and `[]interface{}` TOML values
+- `Validate()` and `Summary()` updated to iterate over slices
+- `SourceDirs` built from `append(cfg.MoviesSources, cfg.TVSources...)`
+
+**Pipeline changes (all files updated for multi-source):**
+
+- **movies.go:** `scan()` iterates over `cfg.MoviesSources`. New `flaggedItem` and `ambiguousItem` structs carry `sourceDir` field. `movieEntry` gains `sourceDir` field. `routeMovie()` accepts `sourceDir` parameter. `tmdbResolve()` accepts `[]flaggedItem` with source directory context.
+- **tv.go:** `scanTV()` iterates over `cfg.TVSources`. `seasonEntry` gains `sourceDir` field. New `passthroughEntry` struct pairs folder name with source dir. `scanMiniseries()` iterates over `cfg.MoviesSources`. `miniEntry` gains `sourceDir` field. `scanBare()` iterates over `cfg.TVSources`. `resolveDupes()` operates on full `seasonEntry` structs (not just folder strings). `warnings()` accepts `[]passthroughEntry`. Season symlink targets use `s.sourceDir` instead of hardcoded `cfg.TVSource`. Miniseries episode paths use `m.sourceDir`. Passthrough targets use `entry.sourceDir`.
+- **health.go:** `Check()` builds source list dynamically from `cfg.MoviesSources` and `cfg.TVSources` slices with indexed labels when multiple sources exist.
+- **orphans.go:** `Scan()` iterates over `cfg.MoviesSources` and `cfg.TVSources` slices, collecting source videos from each.
+- **watch.go:** `sourceDirs()` iterates over `cfg.MoviesSources` and `cfg.TVSources`. `pipelineForDir()` checks against all movie source dirs.
+- **cmd/orphans.go:** `printPipelineOrphans()` accepts `[]string` source dirs, computes relative paths against each.
+
+### Documentation (2.9.6)
+
+- Updated CHANGELOG.md with this entry
+- Updated OVERVIEW.md function references
+- Updated README.md config examples and feature descriptions
+- Updated CLAUDE.md phase status and current state
+
+---
+
 ## [2.2.0] — 2026-03-21
 
 ### Watch mode (daemon)

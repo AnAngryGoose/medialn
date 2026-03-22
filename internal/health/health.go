@@ -26,9 +26,20 @@ type Result struct {
 // Returns one Result per source dir and an overall pass bool.
 // This function is read-only and never modifies the filesystem.
 func Check(cfg *config.Config) ([]Result, bool) {
-	sources := [][2]string{
-		{"movies_source", cfg.MoviesSource},
-		{"tv_source", cfg.TVSource},
+	var sources [][2]string
+	for i, src := range cfg.MoviesSources {
+		label := "movies_source"
+		if len(cfg.MoviesSources) > 1 {
+			label = fmt.Sprintf("movies_source[%d]", i)
+		}
+		sources = append(sources, [2]string{label, src})
+	}
+	for i, src := range cfg.TVSources {
+		label := "tv_source"
+		if len(cfg.TVSources) > 1 {
+			label = fmt.Sprintf("tv_source[%d]", i)
+		}
+		sources = append(sources, [2]string{label, src})
 	}
 
 	allPass := true

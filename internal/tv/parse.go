@@ -263,10 +263,11 @@ func epSymlinkExists(seasonDir string, episode, season int) bool {
 	return false
 }
 
-// seasonEntry holds a (seasonNum, folderRelPath) pair in the grouped map.
+// seasonEntry holds a (seasonNum, folderRelPath, sourceDir) tuple in the grouped map.
 type seasonEntry struct {
-	season int
-	folder string // relative path within tv_source
+	season    int
+	folder    string // relative path within sourceDir
+	sourceDir string // absolute path of the source directory
 }
 
 // normCompare is used for warning detection: strips TVDB IDs, years, then cleans.

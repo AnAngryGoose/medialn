@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const Version = "2.2.0"
+const Version = "2.9.0"
 
 // cfgPath is the global --config flag value, shared across all commands.
 var cfgPath string
@@ -34,6 +34,7 @@ func init() {
 	rootCmd.AddCommand(testLibCmd)
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(orphansCmd)
+	rootCmd.AddCommand(initCmd)
 }
 
 // Execute runs the root command.

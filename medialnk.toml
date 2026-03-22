@@ -1,70 +1,40 @@
-# medialnk configuration
-# https://github.com/AnAngryGoose/medialnk
-
 [paths]
-# Base path where your media directories live on the host.
 media_root_host = "/mnt/storage/data/media"
-
-# Same path inside Docker containers (Jellyfin, Sonarr, etc).
-# If not using Docker, set to same value as media_root_host.
-media_root_container = "/data/media"
-
-# Source directories (never modified). Relative to media_root_host or absolute.
-movies_source = "movies"
-tv_source = "tv"
-
-# Output directories (symlinks created here). Point Jellyfin/Plex at these. Relative to media_root_host or absolute.
-movies_linked = "movies-linked"
-tv_linked = "tv-linked"
+media_root_container = "/data/media"    # same as host if not using Docker
+movies_source = "movies"                # or ["movies", "movies-archive"]
+tv_source = "tv"                        # or ["tv", "tv-old"]
+movies_linked = "movies-linked-test"
+tv_linked = "tv-linked-test"
 
 [tmdb]
-# Free key from https://www.themoviedb.org/settings/api
-# Also settable via TMDB_API_KEY env var.
-api_key = ""
-
-# Reject TMDB results that don't closely match the parsed name.
+api_key = "914285a60cb66eca28e92e90df1a93c7"                            # or TMDB_API_KEY env var
 confidence_check = true
 
 [logging]
-# Per-run log directory. Relative to media_root_host or absolute.
-log_dir = "/opt/medialnk/medialnk/logs"
-
-# Console verbosity: quiet, normal, verbose, debug
-# Override with -q, -v, -vv flags.
-verbosity = "-v"
-
-# --- Overrides ---
-# Run `medialnk sync --dry-run -v` to see parsed names.
+log_dir = "logs"
+verbosity = "normal"                    # quiet | normal | verbose | debug
 
 [overrides.tv_names]
-# "parsed name" = "corrected name"
-# "The Office US" = "The Office (US)"
+"The Office US" = "The Office (US)"
 
 [overrides.tv_orphans]
-# Bare "Season N" folders with no show name.
-# "folder name" = { show = "Show Name", season = 1 }
-
-[overrides.movie_titles]
-# "parsed title" = { title = "Correct Title", year = 2024 }
+"Season 1" = { show = "Little Bear", season = 1 }
 
 [health]
-# Pre-sync validation of source directories.
-enabled = true
-# Abort if a source directory has fewer video files than this (catches unmounted drives).
-min_source_files = 10
-# Optional file that must exist before sync proceeds (e.g. a sentinel on a mergerfs pool).
-sentinel_file = ""
-# HTTP health endpoint port for monitoring. 0 = disabled. Set for Docker HEALTHCHECK.
-port = 0
+# Automatically remove broken symlinks after each sync.
+enabled = true                          # default true
+min_source_files = 10                   # abort sync if fewer video files found
+sentinel_file = ""                      # optional: path that must exist
 
 [sync]
-# Automatically remove broken symlinks after each sync.
-clean_after_sync = false
+clean_after_sync = false                # remove broken symlinks after each sync
 
 [watch]
-# Must be true for `medialnk watch` to start. Prevents accidental daemon starts.
-enabled = false
-# Wait this long after detecting new content before processing (seconds).
-debounce_seconds = 30
-# How often to scan source directories for changes (seconds).
-poll_interval_seconds = 60
+enabled = false                         # must be true for `medialnk watch`
+debounce_seconds = 30                   # delay after detecting new content
+poll_interval_seconds = 60              # source directory poll interval
+
+[policy]
+part_n              = "skip"            # skip | prompt  (default: skip)
+duplicate_season    = "skip"            # skip | prompt | highest  (default: skip)
+conflict_conversion = "auto"            # auto | prompt  (default: auto)
