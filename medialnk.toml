@@ -7,7 +7,7 @@ movies_linked = "movies-linked-test"
 tv_linked = "tv-linked-test"
 
 [tmdb]
-api_key = "914285a60cb66eca28e92e90df1a93c7"                            # or TMDB_API_KEY env var
+api_key = ""                            # or TMDB_API_KEY env var
 confidence_check = true
 
 [logging]

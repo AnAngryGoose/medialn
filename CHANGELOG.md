@@ -2,6 +2,73 @@
 
 ---
 
+## [2.9.1] — 2026-03-22
+
+### Sync summary cleanup and matching fixes
+
+The sync summary now accurately reflects which items were resolved vs truly unresolved. Three matching gaps are fixed: multi-file SceneN folders, bare movies in the TV source, and flagged items silently resolved by TMDB.
+
+### Flagged recording accuracy
+
+Previously, all 30 yearless entries were recorded as flagged *before* TMDB resolution ran. After TMDB resolved 29 of them, the summary still showed "Flagged: 30" with no indication that 29 were successfully linked. Now `RecordMovieFlagged()` is deferred for yearless items until after `tmdbResolve()` completes. Only entries that TMDB did not handle remain flagged.
+
+**`tmdbResolve()` return change:** Now returns `(int, map[string]bool)` — the count of resolved entries plus a set of entry names that were handled (linked, linked as unverified, or recorded as unmatched). The `handled` map prevents double-recording.
+
+**When TMDB is not configured:** All yearless entries correctly remain flagged. The `handled` map is nil, so every yearless entry falls through to `RecordMovieFlagged()`.
+
+### TMDB resolved count in summary
+
+`movies.Run()` return map now includes `"tmdb_resolved": tmdbCount`. The sync summary displays this when > 0:
+```
+  TMDB resolved:  29  (yearless entries matched via TMDB)
+```
+
+### SceneN episode detection
+
+New regex `ReScene` added to `internal/common/helpers.go`:
+```go
+ReScene = regexp.MustCompile(`(?i)(?:^|[.\s\-_])Scene[.\s\-_]?(\d{1,2})\b`)
+```
+
+Added to the `EpisodeInfo()` cascade after `ReNof`, before `RePart`. Files like `Scene1.BluRay.FLAC2.0.x264-SbR.mkv` now parse as S01E01. This means folders with multiple SceneN files (e.g. `Scenes.from.a.Marriage.1973`) are correctly detected as miniseries by `isMiniseries()` and routed to the TV pipeline instead of being reduced to a single file by `LargestVideo()`.
+
+**Effect:** `Scenes.from.a.Marriage.1973` now links as a 6-episode miniseries in `tv-linked/` instead of a single-file movie in `movies-linked/`.
+
+### Misplaced movie auto-linking
+
+Bare movie files in the TV source (files with a parseable title and year but no episode notation) are now detected and linked to `movies-linked/` instead of being reported as unmatched.
+
+**Exported functions:** `movies.Year()` and `movies.Title()` (renamed from unexported `year()` and `title()`) so the TV package can identify movie files.
+
+**`scanBare()` change:** Return type extended from `([]bareNew, []bareConflict, []string)` to `([]bareNew, []bareConflict, []string, []misplacedMovie)`. When `ParseBareEpisode()` returns nil, the file is checked against `movies.Title()` and `movies.Year()`. If both return non-empty, it's classified as a misplaced movie instead of unmatched.
+
+**New type:** `misplacedMovie` struct in `tv/tv.go` with `name` and `filePath` fields.
+
+**Linking in `Run()`:** Misplaced movies are linked to `movies-linked/` using the same folder naming convention as the movies pipeline (`Title (Year)/Title (Year) - QUALITY.ext`). Recorded via `col.RecordMovieLink()`.
+
+**TV package now imports movies package.** No import cycle — movies does not import tv.
+
+**`tv.Run()` return map** now includes `"misplaced": misplacedCount`.
+
+### Summary restructure
+
+Summary output reordered for clarity. Positive outcomes first, then informational, then problems:
+```
+medialnk sync summary
+  Linked:       1520  (movies: 1001, tv: 519)
+  Skipped:         0  (already existed)
+  TMDB resolved:  29  (yearless entries matched via TMDB)
+  Unverified:      4  (linked with parsed name, TMDB pending)
+  Misplaced:       5  (movies in TV source, linked as movies)
+  Flagged:         1  (unresolved)
+    LOST_WORLDS_VANISHED_LIVES             no video file
+  Unmatched:       0
+```
+
+Flagged line now shows "(unresolved)" label. Each conditional line only appears when count > 0.
+
+---
+
 ## [2.9.0] — 2026-03-22
 
 ### Phase 2.9: Core Stability

@@ -128,11 +128,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	col := state.New()
 
+	var movieStats map[string]int
 	if !syncTVOnly {
-		movies.Run(cfg, syncDryRun, syncYes, nonInteractive, log, col)
+		movieStats = movies.Run(cfg, syncDryRun, syncYes, nonInteractive, log, col)
 	}
+	var tvStats map[string]int
 	if !syncMoviesOnly {
-		tv.Run(cfg, syncDryRun, syncYes, nonInteractive, log, col)
+		tvStats = tv.Run(cfg, syncDryRun, syncYes, nonInteractive, log, col)
 	}
 
 	// Write state files (skip in dry-run).
@@ -184,21 +186,36 @@ func runSync(cmd *cobra.Command, args []string) error {
 	totalLinked := s.MoviesLinked + s.TVLinked
 	totalSkipped := s.MoviesSkipped + s.TVSkipped
 
+	tmdbResolved := 0
+	if movieStats != nil {
+		tmdbResolved = movieStats["tmdb_resolved"]
+	}
+	misplaced := 0
+	if tvStats != nil {
+		misplaced = tvStats["misplaced"]
+	}
+
 	log.Quiet("")
 	log.Quiet("medialnk sync summary")
-	log.Quiet("  Linked:     %4d  (movies: %d, tv: %d)", totalLinked, s.MoviesLinked, s.TVLinked)
-	log.Quiet("  Skipped:    %4d  (already existed)", totalSkipped)
+	log.Quiet("  Linked:       %4d  (movies: %d, tv: %d)", totalLinked, s.MoviesLinked, s.TVLinked)
+	log.Quiet("  Skipped:      %4d  (already existed)", totalSkipped)
+	if tmdbResolved > 0 {
+		log.Quiet("  TMDB resolved:%4d  (yearless entries matched via TMDB)", tmdbResolved)
+	}
+	if s.TMDBUnverified > 0 {
+		log.Quiet("  Unverified:   %4d  (linked with parsed name, TMDB pending)", s.TMDBUnverified)
+	}
+	if misplaced > 0 {
+		log.Quiet("  Misplaced:    %4d  (movies in TV source, linked as movies)", misplaced)
+	}
 	if s.MoviesFlagged > 0 {
-		log.Quiet("  Flagged:    %4d", s.MoviesFlagged)
+		log.Quiet("  Flagged:      %4d  (unresolved)", s.MoviesFlagged)
 		for _, f := range s.Flagged {
 			log.Quiet("    %-45s %s", f.Name, f.Reason)
 		}
 	}
-	if s.TMDBUnverified > 0 {
-		log.Quiet("  Unverified: %4d  (linked with parsed name, TMDB pending)", s.TMDBUnverified)
-	}
 	if len(s.Unmatched) > 0 {
-		log.Quiet("  Unmatched:  %4d", len(s.Unmatched))
+		log.Quiet("  Unmatched:    %4d", len(s.Unmatched))
 		for _, u := range s.Unmatched {
 			log.Quiet("    %s", u)
 		}

@@ -24,6 +24,7 @@ var (
 	// The outer non-capturing group is not a captured group, so group 1 = digits.
 	ReBareEpisode = regexp.MustCompile(`(?:^|[^Ss\d])E(\d{2,3})\b`)
 	ReMultiEp     = regexp.MustCompile(`(?i)[-.]?[Ee](\d{2})`)
+	ReScene       = regexp.MustCompile(`(?i)(?:^|[.\s\-_])Scene[.\s\-_]?(\d{1,2})\b`)
 	RePart        = regexp.MustCompile(`(?i)[.\s\-_](?:Part|Pt)[.\s\-_]?(\d{1,2})\b`)
 	ReSample      = regexp.MustCompile(`(?i)\bsample\b`)
 	ReIllegal     = regexp.MustCompile(`[/:\\?*"<>|]`)
@@ -68,6 +69,10 @@ func EpisodeInfo(filename string, includePart bool) *EpisodeResult {
 		return &EpisodeResult{Season: 1, Episode: e}
 	}
 	if m := ReNof.FindStringSubmatch(filename); m != nil {
+		e, _ := strconv.Atoi(m[1])
+		return &EpisodeResult{Season: 1, Episode: e}
+	}
+	if m := ReScene.FindStringSubmatch(filename); m != nil {
 		e, _ := strconv.Atoi(m[1])
 		return &EpisodeResult{Season: 1, Episode: e}
 	}

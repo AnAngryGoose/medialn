@@ -70,12 +70,14 @@ Dry run first, review output, add overrides to config if needed, then run live.
 - Parses scene-format names to extract title and year
 - Groups multiple quality versions of the same film under one canonical folder
 - Detects miniseries misplaced in `/movies/` and routes them to TV automatically
+- Detects SceneN notation (`Scene1`, `Scene2`, ...) as episodes for miniseries routing
 - Resolves yearless entries via TMDB; flags Part.N folders as ambiguous with a prompt
 
 **TV pipeline (two-pass)**
 - Pass 1: groups season folders by show name, creates season symlinks or passthroughs
 - Pass 2: handles bare episode files scattered in source with no parent folder
-- Supported formats: `S01E05`, `S01E05-E06` (multi-ep combined), `3x05`, `Episode.4`
+- Supported formats: `S01E05`, `S01E05-E06` (multi-ep combined), `3x05`, `Episode.4`, `Scene1`
+- Bare movie files in the TV source are auto-linked to movies (title + year detected, no episode notation)
 - Duplicate seasons at different qualities prompt for a choice
 - Conflict resolution converts season symlinks to real directories when individual episode links are needed
 
@@ -91,9 +93,10 @@ Dry run first, review output, add overrides to config if needed, then run live.
 - Source directories cannot be reached by any write path — compile-time enforcement, not runtime
 
 **Sync summary**
-- Every run ends with a clear summary: linked, skipped, flagged, unverified, and unmatched counts
+- Every run ends with a clear summary: linked, skipped, TMDB resolved, unverified, misplaced, flagged, and unmatched
+- Flagged items only show truly unresolved entries — items resolved by TMDB are counted separately
+- Misplaced movies (movie files found in TV source) shown with their linked destination
 - Always printed regardless of verbosity level
-- Unmatched entries show the reason they failed so you know what needs attention
 
 **State tracking**
 - After every real sync, `.medialnk-state.json` is written to each output directory
