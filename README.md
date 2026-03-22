@@ -82,12 +82,18 @@ Dry run first, review output, add overrides to config if needed, then run live.
 **TMDB resolution**
 - Resolves show and movie names to canonical titles
 - Confidence checking prevents false matches; falls back to parsed name when uncertain
+- When TMDB is unreachable or rejects a match, content is linked under the parsed name and flagged as `tmdb_unverified` — content is never missing from the library because of an API failure
 - Transient network failures do not poison the cache
 
 **Source protection**
 - `SafePath` is a Go type that can only be constructed from validated output paths
 - All filesystem write functions accept only `SafePath`, never raw strings
 - Source directories cannot be reached by any write path — compile-time enforcement, not runtime
+
+**Sync summary**
+- Every run ends with a clear summary: linked, skipped, flagged, unverified, and unmatched counts
+- Always printed regardless of verbosity level
+- Unmatched entries show the reason they failed so you know what needs attention
 
 **State tracking**
 - After every real sync, `.medialnk-state.json` is written to each output directory
@@ -111,6 +117,11 @@ Dry run first, review output, add overrides to config if needed, then run live.
 - Optional HTTP health endpoint for Docker HEALTHCHECK and external monitoring
 - Polling-based (not inotify) for reliable operation on MergerFS/FUSE filesystems
 
+**Non-blocking by default**
+- All prompts have sensible defaults so `medialnk sync` completes without a terminal attached
+- Ambiguous items are skipped and logged for manual review, not silently dropped
+- Configurable via `[policy]` section: `part_n`, `duplicate_season`, `conflict_conversion`
+
 **Config overrides**
 - Movie title overrides for names that parse incorrectly
 - TV name overrides for canonical show name corrections
@@ -121,6 +132,7 @@ Dry run first, review output, add overrides to config if needed, then run live.
 ## Commands
 
 ```bash
+medialnk init                  # Interactive config generator
 medialnk sync                  # Full scan and link
 medialnk sync --dry-run        # Preview only, nothing written
 medialnk sync --yes            # Auto-accept all prompts
@@ -157,9 +169,9 @@ Config is searched in order: `--config` flag, `./medialnk.toml`, `~/.config/medi
 ```toml
 [paths]
 media_root_host = "/mnt/storage/data/media"
-media_root_container = "/data/media"    # same as host if not using Docker
-movies_source = "movies"
-tv_source = "tv"
+media_root_container = "/data/media"    # see Docker note below
+movies_source = "movies"                # or ["movies", "movies-archive"] for multiple
+tv_source = "tv"                        # or ["tv", "tv-old"] for multiple
 movies_linked = "movies-linked"
 tv_linked = "tv-linked"
 
@@ -193,7 +205,21 @@ verbosity = "normal"                    # quiet / normal / verbose / debug
 
 [overrides.tv_orphans]
 "Season 1" = { show = "Little Bear", season = 1 }
+
+[policy]
+part_n              = "skip"            # skip | prompt  (default: skip)
+duplicate_season    = "skip"            # skip | prompt | highest  (default: skip)
+conflict_conversion = "auto"            # auto | prompt  (default: auto)
 ```
+
+**Docker container paths:** If your media server runs in Docker and sees media at `/data/media` while the host path is `/mnt/storage/data/media`, set `media_root_container = "/data/media"`. Symlink targets use the container path so they resolve correctly inside containers. If you are not using Docker, leave `media_root_container` the same as `media_root_host` or omit it.
+
+**Multiple source directories:** If your media is spread across drives or directories that are not behind MergerFS, list them all:
+```toml
+movies_source = ["movies", "movies-archive", "/mnt/external/movies"]
+tv_source = ["tv", "tv-old"]
+```
+Single string values continue to work for backward compatibility.
 
 ---
 

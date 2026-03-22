@@ -143,16 +143,22 @@ func (w *Watcher) localPath(cfgAbsPath string) string {
 
 // sourceDirs returns the locally-accessible paths of source directories.
 func (w *Watcher) sourceDirs() []string {
-	return []string{
-		w.localPath(w.cfg.MoviesSource),
-		w.localPath(w.cfg.TVSource),
+	var dirs []string
+	for _, src := range w.cfg.MoviesSources {
+		dirs = append(dirs, w.localPath(src))
 	}
+	for _, src := range w.cfg.TVSources {
+		dirs = append(dirs, w.localPath(src))
+	}
+	return dirs
 }
 
 // pipelineForDir returns "movies" or "tv" based on the source directory.
 func (w *Watcher) pipelineForDir(dir string) string {
-	if dir == w.localPath(w.cfg.MoviesSource) {
-		return "movies"
+	for _, src := range w.cfg.MoviesSources {
+		if dir == w.localPath(src) {
+			return "movies"
+		}
 	}
 	return "tv"
 }

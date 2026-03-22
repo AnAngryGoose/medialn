@@ -12,12 +12,12 @@ import (
 
 // raw TOML shapes — unexported, only used during decode.
 type rawPaths struct {
-	MediaRootHost      string `toml:"media_root_host"`
-	MediaRootContainer string `toml:"media_root_container"`
-	MoviesSource       string `toml:"movies_source"`
-	TVSource           string `toml:"tv_source"`
-	MoviesLinked       string `toml:"movies_linked"`
-	TVLinked           string `toml:"tv_linked"`
+	MediaRootHost      string      `toml:"media_root_host"`
+	MediaRootContainer string      `toml:"media_root_container"`
+	MoviesSource       interface{} `toml:"movies_source"`
+	TVSource           interface{} `toml:"tv_source"`
+	MoviesLinked       string      `toml:"movies_linked"`
+	TVLinked           string      `toml:"tv_linked"`
 }
 
 type rawTMDB struct {
@@ -65,6 +65,12 @@ type rawSync struct {
 	CleanAfterSync *bool `toml:"clean_after_sync"`
 }
 
+type rawPolicy struct {
+	PartN              string `toml:"part_n"`
+	DuplicateSeason    string `toml:"duplicate_season"`
+	ConflictConversion string `toml:"conflict_conversion"`
+}
+
 type rawConfig struct {
 	Paths     rawPaths     `toml:"paths"`
 	TMDB      rawTMDB      `toml:"tmdb"`
@@ -73,6 +79,7 @@ type rawConfig struct {
 	Health    rawHealth    `toml:"health"`
 	Sync      rawSync      `toml:"sync"`
 	Watch     rawWatch     `toml:"watch"`
+	Policy    rawPolicy    `toml:"policy"`
 }
 
 // Config is the resolved, validated configuration for a medialnk run.
@@ -83,8 +90,8 @@ type Config struct {
 	ContainerRoot string
 
 	// Source directories (host absolute paths — read-only)
-	MoviesSource string
-	TVSource     string
+	MoviesSources []string
+	TVSources     []string
 
 	// Output directories (host absolute paths — safe to write via PathGuard)
 	MoviesLinked string
@@ -105,7 +112,7 @@ type Config struct {
 	// Overrides
 	TVNameOverrides    map[string]string
 	TVOrphanOverrides  map[string]OrphanOverride
-	MovieTitleOverrides map[string]string // parsed but not yet applied (Phase 2.2)
+	MovieTitleOverrides map[string]string
 
 	// Health checks
 	HealthEnabled      bool
@@ -120,6 +127,11 @@ type Config struct {
 	WatchEnabled      bool
 	WatchDebounce     int // seconds, default 30
 	WatchPollInterval int // seconds, default 60
+
+	// Policy defaults for prompt behavior
+	PolicyPartN              string // "skip" | "prompt" (default: skip)
+	PolicyDuplicateSeason    string // "skip" | "prompt" | "highest" (default: skip)
+	PolicyConflictConversion string // "auto" | "prompt" (default: auto)
 }
 
 func resolve(val, defaultVal, root string) string {
@@ -130,6 +142,26 @@ func resolve(val, defaultVal, root string) string {
 		return val
 	}
 	return filepath.Join(root, val)
+}
+
+// resolveMulti handles a TOML value that may be a single string or an array of strings.
+// Returns a slice of resolved absolute paths.
+func resolveMulti(val interface{}, defaultVal, root string) []string {
+	switch v := val.(type) {
+	case string:
+		return []string{resolve(v, defaultVal, root)}
+	case []interface{}:
+		if len(v) == 0 {
+			return []string{resolve("", defaultVal, root)}
+		}
+		out := make([]string, len(v))
+		for i, item := range v {
+			out[i] = resolve(fmt.Sprintf("%v", item), defaultVal, root)
+		}
+		return out
+	default:
+		return []string{resolve("", defaultVal, root)}
+	}
 }
 
 // Load reads a TOML config file and returns a fully resolved Config.
@@ -152,12 +184,12 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		HostRoot:      hostRoot,
 		ContainerRoot: containerRoot,
-		MoviesSource:  resolve(raw.Paths.MoviesSource, "movies", hostRoot),
-		TVSource:      resolve(raw.Paths.TVSource, "tv", hostRoot),
+		MoviesSources: resolveMulti(raw.Paths.MoviesSource, "movies", hostRoot),
+		TVSources:     resolveMulti(raw.Paths.TVSource, "tv", hostRoot),
 		MoviesLinked:  resolve(raw.Paths.MoviesLinked, "movies-linked", hostRoot),
 		TVLinked:      resolve(raw.Paths.TVLinked, "tv-linked", hostRoot),
 	}
-	cfg.SourceDirs = []string{cfg.MoviesSource, cfg.TVSource}
+	cfg.SourceDirs = append(cfg.MoviesSources, cfg.TVSources...)
 	cfg.OutputDirs = []string{cfg.MoviesLinked, cfg.TVLinked}
 
 	// TMDB: env var takes priority over config file
@@ -225,6 +257,23 @@ func Load(path string) (*Config, error) {
 		cfg.CleanAfterSync = *raw.Sync.CleanAfterSync
 	}
 
+	// Policy defaults — non-blocking defaults for unattended operation.
+	cfg.PolicyPartN = "skip"
+	if raw.Policy.PartN == "prompt" {
+		cfg.PolicyPartN = "prompt"
+	}
+	cfg.PolicyDuplicateSeason = "skip"
+	switch raw.Policy.DuplicateSeason {
+	case "prompt":
+		cfg.PolicyDuplicateSeason = "prompt"
+	case "highest":
+		cfg.PolicyDuplicateSeason = "highest"
+	}
+	cfg.PolicyConflictConversion = "auto"
+	if raw.Policy.ConflictConversion == "prompt" {
+		cfg.PolicyConflictConversion = "prompt"
+	}
+
 	return cfg, nil
 }
 
@@ -235,12 +284,14 @@ func (c *Config) Validate() []string {
 	if info, err := os.Stat(c.HostRoot); err != nil || !info.IsDir() {
 		errs = append(errs, fmt.Sprintf("media_root_host not found: %s", c.HostRoot))
 	}
-	for _, pair := range [][2]string{
-		{"movies_source", c.MoviesSource},
-		{"tv_source", c.TVSource},
-	} {
-		if info, err := os.Stat(pair[1]); err != nil || !info.IsDir() {
-			errs = append(errs, fmt.Sprintf("%s not found: %s", pair[0], pair[1]))
+	for _, src := range c.MoviesSources {
+		if info, err := os.Stat(src); err != nil || !info.IsDir() {
+			errs = append(errs, fmt.Sprintf("movies_source not found: %s", src))
+		}
+	}
+	for _, src := range c.TVSources {
+		if info, err := os.Stat(src); err != nil || !info.IsDir() {
+			errs = append(errs, fmt.Sprintf("tv_source not found: %s", src))
 		}
 	}
 	return errs
@@ -256,6 +307,8 @@ func (c *Config) Summary() string {
 	if !c.HealthEnabled {
 		healthStatus = "disabled"
 	}
+	moviesSrc := strings.Join(c.MoviesSources, ", ")
+	tvSrc := strings.Join(c.TVSources, ", ")
 	return fmt.Sprintf(
 		"  Host root:      %s\n"+
 			"  Container root: %s\n"+
@@ -267,7 +320,7 @@ func (c *Config) Summary() string {
 			"  TV overrides:   %d names, %d orphans\n"+
 			"  Health checks:  %s (min %d files)",
 		c.HostRoot, c.ContainerRoot,
-		c.MoviesSource, c.TVSource,
+		moviesSrc, tvSrc,
 		c.MoviesLinked, c.TVLinked,
 		tmdbStatus,
 		len(c.TVNameOverrides), len(c.TVOrphanOverrides),

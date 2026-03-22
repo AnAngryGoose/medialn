@@ -1,6 +1,6 @@
 # medialnk Project Overview
 
-**Version:** 2.2.0
+**Version:** 2.9.0
 **Repository:** https://github.com/AnAngryGoose/medialnk
 **Language:** Go
 **Dependencies:** BurntSushi/toml, spf13/cobra (build-time only, static binary output)
@@ -121,6 +121,7 @@ medialnk/
     validate.go      # validate subcommand
     orphans.go       # orphans subcommand (Phase 2.3)
     watch.go         # watch subcommand (daemon mode)
+    init.go          # init subcommand (interactive config generator, Phase 2.9.4)
     testlib.go       # test-library subcommand
   internal/
     config/
@@ -180,6 +181,8 @@ medialnk orphans -q            # orphan counts only
 medialnk watch                 # daemon: poll source dirs, auto-sync new content
                                # requires [watch] enabled = true in config
 
+medialnk init                  # interactive config generator
+
 medialnk test-library /path    # generate fake library for testing
 medialnk test-library /path --reset
 
@@ -200,8 +203,8 @@ Config file searched in order:
 [paths]
 media_root_host = "/mnt/storage/data/media"
 media_root_container = "/data/media"    # same as host if not using Docker
-movies_source = "movies"
-tv_source = "tv"
+movies_source = "movies"                # or ["movies", "movies-archive"]
+tv_source = "tv"                        # or ["tv", "tv-old"]
 movies_linked = "movies-linked"
 tv_linked = "tv-linked"
 
@@ -231,6 +234,11 @@ clean_after_sync = false                # remove broken symlinks after each sync
 enabled = false                         # must be true for `medialnk watch`
 debounce_seconds = 30                   # delay after detecting new content
 poll_interval_seconds = 60              # source directory poll interval
+
+[policy]
+part_n              = "skip"            # skip | prompt  (default: skip)
+duplicate_season    = "skip"            # skip | prompt | highest  (default: skip)
+conflict_conversion = "auto"            # auto | prompt  (default: auto)
 ```
 
 **Rule:** Config file controls installation behavior (paths, keys, overrides). CLI flags control per-run behavior (`--dry-run`, `--yes`, `-v`). CLI flags override config where they overlap.
@@ -430,6 +438,7 @@ Complete catalogue of every exported and significant unexported function, groupe
 | `Sanitize(name)` | Replaces filesystem-illegal characters (`/:\?*"<>\|`) with `-`. |
 | `CleanPassthroughName(folderName)` | Converts dots to spaces (only if name has no spaces), then normalizes whitespace. No metadata stripping. |
 | `PromptChoice(message, valid)` | Reads stdin in a loop until the user enters one of the valid choices (case-insensitive). |
+| `IsTerminal()` | Returns true if stdin is connected to a terminal (character device). Used by `cmd/sync.go` to derive `nonInteractive` mode. |
 
 **Shared regex patterns** (exported for use by tv/parse.go):
 
@@ -473,11 +482,11 @@ Complete catalogue of every exported and significant unexported function, groupe
 
 | Function | Description |
 |---|---|
-| `scan(cfg)` | Scans `movies_source`; categorizes entries as movies, flagged (no title/year), skipped (miniseries), or ambiguous (Part.N). Returns all four slices. |
+| `scan(cfg)` | Scans all `movies_source` directories; categorizes entries as movies, flagged (no title/year), skipped (miniseries), or ambiguous (Part.N). Returns all four slices. Each entry tracks its source directory for multi-source support. |
 | `resolveVersions(seen)` | Flattens the grouped `map[key][]movieEntry` into a sorted slice, assigning quality labels to multi-version groups and numbering same-quality duplicates. |
 | `Run(cfg, dryRun, auto, nonInteractive, log, col)` | Executes the full movie pipeline: scan → link → handle ambiguous Part.N → TMDB yearless resolution. Records all links, skips, flags, and TMDB misses to the state collector. When `nonInteractive` is true, skips ambiguous Part.N entries (logs `[WATCH]` and flags for review) instead of prompting. Returns summary count map. |
-| `routeMovie(entryName, t, y, cfg, dryRun, log, col)` | Handles an ambiguous Part.N folder confirmed as a movie: finds the largest video and creates the symlink. Records to state collector. |
-| `tmdbResolve(noYear, cfg, dryRun, log, col)` | Concurrently resolves yearless flagged entries via TMDB (up to 8 goroutines). Creates symlinks for resolved entries. Records links and misses to state collector. Returns count resolved. |
+| `routeMovie(entryName, t, y, sourceDir, cfg, dryRun, log, col)` | Handles an ambiguous Part.N folder confirmed as a movie: finds the largest video and creates the symlink. `sourceDir` is the absolute path of the source directory containing the entry. Records to state collector. |
+| `tmdbResolve(noYear, cfg, dryRun, log, col)` | Concurrently resolves yearless flagged entries via TMDB (up to 8 goroutines). Accepts `[]flaggedItem` (each carries name and sourceDir). On TMDB hit, links under canonical name. On TMDB miss, links under parsed name as unverified fallback. Records links, unverified links, and misses to state collector. Returns count resolved. |
 
 ---
 
@@ -511,9 +520,9 @@ Complete catalogue of every exported and significant unexported function, groupe
 | Function | Description |
 |---|---|
 | `scanSeasonContainer(folderName, folderPath, overrides)` | Handles multi-season pack folders (S01-S31 range indicator). Extracts the show name, recurses one level to find season subfolders, returns `(show, seasonNum, relPath)` tuples. |
-| `scanTV(cfg)` | Pass 1 scanner: reads `tv_source`, groups entries by show name into `map[show][]seasonEntry`. Returns the grouped map and a list of passthrough folder names. |
-| `scanMiniseries(cfg)` | Reads `movies_source` for folders containing ≥2 episode files (miniseries). Returns a map of show name → episode list. |
-| `resolveDupes(show, seasons, dryRun, auto, nonInteractive, log)` | For shows with multiple folders for the same season number, prompts the user (or picks first in auto/dry-run/non-interactive) to select one. Returns the deduplicated season list. |
+| `scanTV(cfg)` | Pass 1 scanner: reads all `tv_source` directories, groups entries by show name into `map[show][]seasonEntry`. Each season entry tracks its source directory. Returns the grouped map and a list of passthrough entries. |
+| `scanMiniseries(cfg)` | Reads all `movies_source` directories for folders containing ≥2 episode files (miniseries). Each entry tracks its source directory. Returns a map of show name → episode list. |
+| `resolveDupes(show, seasons, cfg, dryRun, auto, nonInteractive, log)` | For shows with multiple folders for the same season number, uses `cfg.PolicyDuplicateSeason` to determine behavior: "skip" picks first, "highest" picks best quality, "prompt" asks the user. In dry-run/auto/non-interactive mode, prompts are always skipped. Returns the deduplicated season list. |
 | `convertSeason(show, snum, path, cfg, dryRun, log, col)` | Replaces a season folder symlink with a real directory, re-linking all episodes individually. Records each re-linked episode to state collector (only when ParseBareEpisode succeeds). |
 | `scanBare(grouped, cfg, log)` | Pass 2 scanner: reads bare episode files in `tv_source`, classifies each as new, conflict, or unmatched. Returns all three lists. |
 | `handleNew(newEps, cfg, dryRun, log, col)` | Creates show/season directories and symlinks for all new bare episodes (no conflict with Pass 1). Records to state collector. Returns count linked. |
@@ -552,12 +561,14 @@ Complete catalogue of every exported and significant unexported function, groupe
 | `Collector.RecordMovieLink(title, year, quality, src, link)` | Records a newly created movie symlink with timestamp. Nil-safe. |
 | `Collector.RecordMovieSkip(title, year, quality, src, link)` | Records a movie symlink that already existed (skip). Nil-safe. |
 | `Collector.RecordMovieFlagged(name, reason)` | Records a source entry that could not be parsed. Nil-safe. |
+| `Collector.RecordMovieLinkUnverified(title, year, quality, src, link)` | Records a movie symlink linked under parsed name when TMDB failed. Sets `TMDBUnverified: true`. Nil-safe. |
 | `Collector.RecordMovieUnmatched(name)` | Records a yearless entry that TMDB could not resolve. Nil-safe. |
 | `Collector.RecordTVSeasonLink(show, season, src, link)` | Records a newly created TV season folder symlink. Nil-safe. |
 | `Collector.RecordTVSeasonSkip(show, season, src, link)` | Records a TV season symlink that already existed. Nil-safe. |
 | `Collector.RecordTVEpisodeLink(show, season, episode, secondEp, quality, src, link)` | Records a newly created TV episode symlink. `secondEp` is `*int` (nil for single ep). Nil-safe. |
 | `Collector.RecordTVEpisodeSkip(show, season, episode, secondEp, quality, src, link)` | Records a TV episode symlink that already existed. Nil-safe. |
 | `Collector.RecordTVUnmatched(names)` | Records bare episode filenames that could not be matched. Nil-safe. |
+| `Collector.Summary()` | Aggregates both pipeline states into a `SummaryData` struct with linked/skipped/flagged/unverified/unmatched counts. Used by `cmd/sync.go` for the sync summary output. |
 | `Collector.WriteMovies(path SafePath, version)` | Finalizes run metadata and writes the movies state to a JSON file via PathGuard. |
 | `Collector.WriteTV(path SafePath, version)` | Finalizes run metadata and writes the TV state to a JSON file via PathGuard. |
 
@@ -605,7 +616,7 @@ Complete catalogue of every exported and significant unexported function, groupe
 Full detail in TODO.md. High-level phases:
 
 1. **Go port** (complete) — Feature parity with Python version
-2. **Foundation** (current) — State tracking (complete), orphan scanner (complete), health checks (complete), watch mode daemon (complete), Docker, `medialnk status`
+2. **Foundation** (complete through 2.9) — State tracking, orphan scanner, health checks, watch mode daemon, core stability (non-blocking prompts, sync summary, TMDB fallback, `medialnk init`, multi-source). Next: Docker (2.6), `medialnk status` (2.7)
 3. **Presentation layer enrichment** — Companion files, NFO generation, artwork, TMDB collections, user profiles, ffprobe validation
 4. **Automation and stack integration** — qBit API, subtitle download, Jellyfin API, Autoscan, arr webhook receiver, notifications, Prometheus
 5. **Arr integration layer** — Arr handoff mode, multi-season pack bridge, unmatched release rescue, cross-seed deduplication, safe import architecture, specials handling

@@ -58,8 +58,14 @@ func Scan(cfg *config.Config) (*Report, error) {
 	}
 
 	// Step 2: Walk each source directory.
-	moviesSource := collectSourceVideos(cfg.MoviesSource)
-	tvSource := collectSourceVideos(cfg.TVSource)
+	var moviesSource []sourceFile
+	for _, src := range cfg.MoviesSources {
+		moviesSource = append(moviesSource, collectSourceVideos(src)...)
+	}
+	var tvSource []sourceFile
+	for _, src := range cfg.TVSources {
+		tvSource = append(tvSource, collectSourceVideos(src)...)
+	}
 
 	// Step 3: Compute orphans.
 	report := &Report{}

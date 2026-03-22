@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -129,8 +130,8 @@ func printOrphansHuman(cfg *config.Config, r *orphans.Report) error {
 
 	log.Normal("medialnk v%s orphans\n", Version)
 
-	printPipelineOrphans(log, "Movies", cfg.MoviesSource, r.MoviesOrphans, r.MoviesCovered)
-	printPipelineOrphans(log, "TV", cfg.TVSource, r.TVOrphans, r.TVCovered)
+	printPipelineOrphans(log, "Movies", cfg.MoviesSources, r.MoviesOrphans, r.MoviesCovered)
+	printPipelineOrphans(log, "TV", cfg.TVSources, r.TVOrphans, r.TVCovered)
 
 	log.Normal("Summary: %d orphans / %d source files (%.1f%% coverage)",
 		r.TotalOrphans(), r.TotalSource(), r.CoveragePct())
@@ -138,7 +139,7 @@ func printOrphansHuman(cfg *config.Config, r *orphans.Report) error {
 	return nil
 }
 
-func printPipelineOrphans(log *logger.Logger, label, sourceDir string, items []orphans.OrphanFile, covered int) {
+func printPipelineOrphans(log *logger.Logger, label string, sourceDirs []string, items []orphans.OrphanFile, covered int) {
 	total := covered + len(items)
 	if len(items) == 0 {
 		log.Normal("%s: 0 orphans / %d source files\n", label, total)
@@ -149,7 +150,13 @@ func printPipelineOrphans(log *logger.Logger, label, sourceDir string, items []o
 
 	lastFolder := ""
 	for _, o := range items {
-		rel, _ := filepath.Rel(sourceDir, o.Path)
+		rel := o.Path
+		for _, sd := range sourceDirs {
+			if r, err := filepath.Rel(sd, o.Path); err == nil && !strings.HasPrefix(r, "..") {
+				rel = r
+				break
+			}
+		}
 		folder := filepath.Dir(rel)
 		if folder != lastFolder {
 			log.Normal("  %s/", folder)

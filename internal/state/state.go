@@ -15,17 +15,18 @@ import (
 
 // Entry represents a single linked or skipped item in the state file.
 type Entry struct {
-	Type       string `json:"type"`                  // "movie" | "tv_season" | "tv_episode"
-	Title      string `json:"title,omitempty"`        // movie title
-	Year       string `json:"year,omitempty"`         // movie year
-	Show       string `json:"show,omitempty"`         // TV show name
-	Season     int    `json:"season,omitempty"`        // TV season number
-	Episode    int    `json:"episode,omitempty"`       // TV episode number
-	SecondEp   *int   `json:"second_ep,omitempty"`     // multi-ep second episode; nil = single
-	Quality    string `json:"quality,omitempty"`       // detected quality tag
-	SourcePath string `json:"source_path"`             // absolute source file/folder path
-	LinkPath   string `json:"link_path"`               // absolute symlink path in output
-	LinkedAt   string `json:"linked_at,omitempty"`     // RFC3339 timestamp; only on linked entries
+	Type           string `json:"type"`                      // "movie" | "tv_season" | "tv_episode"
+	Title          string `json:"title,omitempty"`            // movie title
+	Year           string `json:"year,omitempty"`             // movie year
+	Show           string `json:"show,omitempty"`             // TV show name
+	Season         int    `json:"season,omitempty"`            // TV season number
+	Episode        int    `json:"episode,omitempty"`           // TV episode number
+	SecondEp       *int   `json:"second_ep,omitempty"`         // multi-ep second episode; nil = single
+	Quality        string `json:"quality,omitempty"`           // detected quality tag
+	SourcePath     string `json:"source_path"`                 // absolute source file/folder path
+	LinkPath       string `json:"link_path"`                   // absolute symlink path in output
+	LinkedAt       string `json:"linked_at,omitempty"`         // RFC3339 timestamp; only on linked entries
+	TMDBUnverified bool   `json:"tmdb_unverified,omitempty"`   // linked with parsed name, TMDB not confirmed
 }
 
 // FlaggedEntry represents a source entry that could not be parsed or routed.
@@ -89,6 +90,25 @@ func (c *Collector) RecordMovieLink(title, year, quality, src, link string) {
 		SourcePath: src,
 		LinkPath:   link,
 		LinkedAt:   now(),
+	})
+}
+
+// RecordMovieLinkUnverified records a movie symlink created without TMDB confirmation.
+func (c *Collector) RecordMovieLinkUnverified(title, year, quality, src, link string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.movies.Linked = append(c.movies.Linked, Entry{
+		Type:           "movie",
+		Title:          title,
+		Year:           year,
+		Quality:        quality,
+		SourcePath:     src,
+		LinkPath:       link,
+		LinkedAt:       now(),
+		TMDBUnverified: true,
 	})
 }
 
@@ -213,6 +233,65 @@ func (c *Collector) RecordTVUnmatched(names []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.tv.Unmatched = append(c.tv.Unmatched, names...)
+}
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+
+// SummaryData holds aggregate counts from both pipelines for display.
+type SummaryData struct {
+	MoviesLinked    int
+	MoviesSkipped   int
+	MoviesFlagged   int
+	MoviesUnmatched int
+	TVLinked        int
+	TVSkipped       int
+	TVUnmatched     int
+	TMDBUnverified  int
+	Flagged         []FlaggedEntry
+	Unmatched       []string
+}
+
+// Summary returns aggregate counts from both pipelines.
+func (c *Collector) Summary() SummaryData {
+	if c == nil {
+		return SummaryData{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var flagged []FlaggedEntry
+	flagged = append(flagged, c.movies.Flagged...)
+
+	var unmatched []string
+	unmatched = append(unmatched, c.movies.Unmatched...)
+	unmatched = append(unmatched, c.tv.Unmatched...)
+
+	unverified := 0
+	for _, e := range c.movies.Linked {
+		if e.TMDBUnverified {
+			unverified++
+		}
+	}
+	for _, e := range c.tv.Linked {
+		if e.TMDBUnverified {
+			unverified++
+		}
+	}
+
+	return SummaryData{
+		MoviesLinked:    len(c.movies.Linked),
+		MoviesSkipped:   len(c.movies.Skipped),
+		MoviesFlagged:   len(c.movies.Flagged),
+		MoviesUnmatched: len(c.movies.Unmatched),
+		TVLinked:        len(c.tv.Linked),
+		TVSkipped:       len(c.tv.Skipped),
+		TVUnmatched:     len(c.tv.Unmatched),
+		TMDBUnverified:  unverified,
+		Flagged:         flagged,
+		Unmatched:       unmatched,
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -118,8 +118,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	nonInteractive := !common.IsTerminal()
+
 	for _, d := range cfg.OutputDirs {
-		if _, err := common.ValidateOutputDir(d, syncDryRun, false); err != nil {
+		if _, err := common.ValidateOutputDir(d, syncDryRun, nonInteractive); err != nil {
 			os.Exit(1)
 		}
 	}
@@ -127,10 +129,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 	col := state.New()
 
 	if !syncTVOnly {
-		movies.Run(cfg, syncDryRun, syncYes, false, log, col)
+		movies.Run(cfg, syncDryRun, syncYes, nonInteractive, log, col)
 	}
 	if !syncMoviesOnly {
-		tv.Run(cfg, syncDryRun, syncYes, false, log, col)
+		tv.Run(cfg, syncDryRun, syncYes, nonInteractive, log, col)
 	}
 
 	// Write state files (skip in dry-run).
@@ -177,11 +179,36 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	log.Normal("")
+	// Sync summary — always printed regardless of verbosity.
+	s := col.Summary()
+	totalLinked := s.MoviesLinked + s.TVLinked
+	totalSkipped := s.MoviesSkipped + s.TVSkipped
+
+	log.Quiet("")
+	log.Quiet("medialnk sync summary")
+	log.Quiet("  Linked:     %4d  (movies: %d, tv: %d)", totalLinked, s.MoviesLinked, s.TVLinked)
+	log.Quiet("  Skipped:    %4d  (already existed)", totalSkipped)
+	if s.MoviesFlagged > 0 {
+		log.Quiet("  Flagged:    %4d", s.MoviesFlagged)
+		for _, f := range s.Flagged {
+			log.Quiet("    %-45s %s", f.Name, f.Reason)
+		}
+	}
+	if s.TMDBUnverified > 0 {
+		log.Quiet("  Unverified: %4d  (linked with parsed name, TMDB pending)", s.TMDBUnverified)
+	}
+	if len(s.Unmatched) > 0 {
+		log.Quiet("  Unmatched:  %4d", len(s.Unmatched))
+		for _, u := range s.Unmatched {
+			log.Quiet("    %s", u)
+		}
+	}
+
+	log.Quiet("")
 	if syncDryRun {
-		log.Normal("Dry run complete.")
+		log.Quiet("Dry run complete.")
 	} else {
-		log.Normal("Sync complete. Log: %s", logFile)
+		log.Quiet("Sync complete. Log: %s", logFile)
 	}
 	return nil
 }

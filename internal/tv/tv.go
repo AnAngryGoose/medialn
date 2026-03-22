@@ -89,10 +89,16 @@ func scanSeasonContainer(folderName, folderPath string, overrides map[string]str
 // Pass 1 scanner
 // ---------------------------------------------------------------------------
 
-func scanTV(cfg *config.Config) (map[string][]seasonEntry, []string) {
+// passthroughEntry pairs an unprocessed folder name with its source directory.
+type passthroughEntry struct {
+	name      string
+	sourceDir string
+}
+
+func scanTV(cfg *config.Config) (map[string][]seasonEntry, []passthroughEntry) {
 	grouped := map[string][]seasonEntry{}
 	nameMap := map[string]string{} // normKey -> canonical show name
-	var pt []string                // passthrough folder names
+	var pt []passthroughEntry
 
 	canon := func(show string) string {
 		k := normKey(show)
@@ -102,53 +108,55 @@ func scanTV(cfg *config.Config) (map[string][]seasonEntry, []string) {
 		return nameMap[k]
 	}
 
-	entries, err := os.ReadDir(cfg.TVSource)
-	if err != nil {
-		return grouped, pt
-	}
-
-	for _, e := range entries {
-		nm := e.Name()
-
-		// Orphan overrides take priority.
-		if ov, ok := cfg.TVOrphanOverrides[nm]; ok {
-			show := canon(ov.Show)
-			grouped[show] = append(grouped[show], seasonEntry{ov.Season, nm})
+	for _, srcDir := range cfg.TVSources {
+		entries, err := os.ReadDir(srcDir)
+		if err != nil {
 			continue
 		}
 
-		if !e.IsDir() {
-			continue
-		}
+		for _, e := range entries {
+			nm := e.Name()
 
-		folderPath := filepath.Join(cfg.TVSource, nm)
-
-		if show, snum, ok := showSeason(nm, cfg.TVNameOverrides); ok {
-			show = canon(show)
-			grouped[show] = append(grouped[show], seasonEntry{snum, nm})
-			continue
-		}
-
-		if isBareEpFolder(folderPath) {
-			show := cleanShow(nm)
-			if canonical, ok := cfg.TVNameOverrides[show]; ok {
-				show = canonical
+			// Orphan overrides take priority.
+			if ov, ok := cfg.TVOrphanOverrides[nm]; ok {
+				show := canon(ov.Show)
+				grouped[show] = append(grouped[show], seasonEntry{ov.Season, nm, srcDir})
+				continue
 			}
-			show = common.Sanitize(show)
-			show = canon(show)
-			grouped[show] = append(grouped[show], seasonEntry{1, nm})
-			continue
-		}
 
-		if seasons := scanSeasonContainer(nm, folderPath, cfg.TVNameOverrides); len(seasons) > 0 {
-			for _, s := range seasons {
-				show := canon(s.show)
-				grouped[show] = append(grouped[show], seasonEntry{s.season, s.rel})
+			if !e.IsDir() {
+				continue
 			}
-			continue
-		}
 
-		pt = append(pt, nm)
+			folderPath := filepath.Join(srcDir, nm)
+
+			if show, snum, ok := showSeason(nm, cfg.TVNameOverrides); ok {
+				show = canon(show)
+				grouped[show] = append(grouped[show], seasonEntry{snum, nm, srcDir})
+				continue
+			}
+
+			if isBareEpFolder(folderPath) {
+				show := cleanShow(nm)
+				if canonical, ok := cfg.TVNameOverrides[show]; ok {
+					show = canonical
+				}
+				show = common.Sanitize(show)
+				show = canon(show)
+				grouped[show] = append(grouped[show], seasonEntry{1, nm, srcDir})
+				continue
+			}
+
+			if seasons := scanSeasonContainer(nm, folderPath, cfg.TVNameOverrides); len(seasons) > 0 {
+				for _, s := range seasons {
+					show := canon(s.show)
+					grouped[show] = append(grouped[show], seasonEntry{s.season, s.rel, srcDir})
+				}
+				continue
+			}
+
+			pt = append(pt, passthroughEntry{nm, srcDir})
+		}
 	}
 	return grouped, pt
 }
@@ -158,8 +166,9 @@ func scanTV(cfg *config.Config) (map[string][]seasonEntry, []string) {
 // ---------------------------------------------------------------------------
 
 type miniEntry struct {
-	folder  string // folder name in movies_source
-	episodes []struct {
+	folder    string // folder name in source directory
+	sourceDir string // absolute path of the source directory
+	episodes  []struct {
 		season  int
 		episode int
 		file    string
@@ -168,44 +177,46 @@ type miniEntry struct {
 
 func scanMiniseries(cfg *config.Config) map[string]miniEntry {
 	results := map[string]miniEntry{}
-	entries, err := os.ReadDir(cfg.MoviesSource)
-	if err != nil {
-		return results
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		folderPath := filepath.Join(cfg.MoviesSource, e.Name())
-		subEntries, err := os.ReadDir(folderPath)
+	for _, srcDir := range cfg.MoviesSources {
+		entries, err := os.ReadDir(srcDir)
 		if err != nil {
 			continue
 		}
-		var eps []struct {
-			season, episode int
-			file            string
-		}
-		for _, f := range subEntries {
-			if f.IsDir() || !common.IsVideo(f.Name()) || common.IsSample(f.Name()) {
+		for _, e := range entries {
+			if !e.IsDir() {
 				continue
 			}
-			info := common.EpisodeInfo(f.Name(), false)
-			if info != nil {
-				eps = append(eps, struct {
-					season, episode int
-					file            string
-				}{info.Season, info.Episode, f.Name()})
+			folderPath := filepath.Join(srcDir, e.Name())
+			subEntries, err := os.ReadDir(folderPath)
+			if err != nil {
+				continue
 			}
-		}
-		if len(eps) >= 2 {
-			sort.Slice(eps, func(i, j int) bool {
-				if eps[i].season != eps[j].season {
-					return eps[i].season < eps[j].season
+			var eps []struct {
+				season, episode int
+				file            string
+			}
+			for _, f := range subEntries {
+				if f.IsDir() || !common.IsVideo(f.Name()) || common.IsSample(f.Name()) {
+					continue
 				}
-				return eps[i].episode < eps[j].episode
-			})
-			show := cleanShow(e.Name())
-			results[show] = miniEntry{e.Name(), eps}
+				info := common.EpisodeInfo(f.Name(), true)
+				if info != nil {
+					eps = append(eps, struct {
+						season, episode int
+						file            string
+					}{info.Season, info.Episode, f.Name()})
+				}
+			}
+			if len(eps) >= 2 {
+				sort.Slice(eps, func(i, j int) bool {
+					if eps[i].season != eps[j].season {
+						return eps[i].season < eps[j].season
+					}
+					return eps[i].episode < eps[j].episode
+				})
+				show := cleanShow(e.Name())
+				results[show] = miniEntry{e.Name(), srcDir, eps}
+			}
 		}
 	}
 	return results
@@ -215,10 +226,21 @@ func scanMiniseries(cfg *config.Config) map[string]miniEntry {
 // Duplicate season resolution
 // ---------------------------------------------------------------------------
 
-func resolveDupes(show string, seasons []seasonEntry, dryRun, auto, nonInteractive bool, log Log) []seasonEntry {
-	byS := map[int][]string{}
+// qualityRank returns a numeric rank for a quality tag (higher = better).
+func qualityRank(q string) int {
+	ranks := map[string]int{
+		"2160P": 5, "UHD": 5, "REMUX": 4,
+		"1080P": 3, "BLURAY": 3, "BDRIP": 3,
+		"720P": 2, "WEB-DL": 2, "WEBRIP": 2, "HDTV": 2,
+		"576P": 1, "480P": 1, "DVDRIP": 1,
+	}
+	return ranks[strings.ToUpper(q)]
+}
+
+func resolveDupes(show string, seasons []seasonEntry, cfg *config.Config, dryRun, auto, nonInteractive bool, log Log) []seasonEntry {
+	byS := map[int][]seasonEntry{}
 	for _, s := range seasons {
-		byS[s.season] = append(byS[s.season], s.folder)
+		byS[s.season] = append(byS[s.season], s)
 	}
 	var snums []int
 	for sn := range byS {
@@ -228,39 +250,50 @@ func resolveDupes(show string, seasons []seasonEntry, dryRun, auto, nonInteracti
 
 	var resolved []seasonEntry
 	for _, sn := range snums {
-		folders := byS[sn]
-		if len(folders) == 1 {
-			resolved = append(resolved, seasonEntry{sn, folders[0]})
+		entries := byS[sn]
+		if len(entries) == 1 {
+			resolved = append(resolved, entries[0])
 			continue
 		}
-		log.Normal("    [DUPLICATE] %s S%02d: %d sources", show, sn, len(folders))
-		for i, f := range folders {
-			q := common.ExtractQuality(f)
+		log.Normal("    [DUPLICATE] %s S%02d: %d sources", show, sn, len(entries))
+		for i, se := range entries {
+			q := common.ExtractQuality(se.folder)
 			if q == "" {
 				q = "unknown"
 			}
-			log.Normal("      [%d] %s  (%s)", i+1, f, q)
+			log.Normal("      [%d] %s  (%s)", i+1, se.folder, q)
 		}
-		if dryRun || auto || nonInteractive {
+		if dryRun || nonInteractive || auto || cfg.PolicyDuplicateSeason != "prompt" {
+			pick := entries[0]
+			reason := "policy: skip"
 			if dryRun {
-				log.Normal("      (dry-run: first)")
+				reason = "dry-run"
 			} else if nonInteractive {
-				log.Normal("      (non-interactive: first)")
-			} else {
-				log.Normal("      (auto: first)")
-			}
-			resolved = append(resolved, seasonEntry{sn, folders[0]})
-		} else {
-			for {
-				fmt.Printf("      Choose [1-%d]: ", len(folders))
-				var line string
-				fmt.Scanln(&line)
-				line = strings.TrimSpace(line)
-				if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(folders) {
-					resolved = append(resolved, seasonEntry{sn, folders[n-1]})
-					break
+				reason = "non-interactive"
+			} else if auto {
+				reason = "auto"
+			} else if cfg.PolicyDuplicateSeason == "highest" {
+				best := 0
+				bestQ := ""
+				for i, se := range entries {
+					q := common.ExtractQuality(se.folder)
+					if qualityRank(q) > qualityRank(bestQ) {
+						best, bestQ = i, q
+					}
 				}
+				pick = entries[best]
+				reason = "policy: highest"
 			}
+			log.Normal("      (%s: %s)", reason, pick.folder)
+			resolved = append(resolved, pick)
+		} else {
+			choices := make([]string, len(entries))
+			for i := range entries {
+				choices[i] = strconv.Itoa(i + 1)
+			}
+			c := common.PromptChoice(fmt.Sprintf("      Choose [1-%d]: ", len(entries)), choices)
+			n, _ := strconv.Atoi(c)
+			resolved = append(resolved, entries[n-1])
 		}
 	}
 	return resolved
@@ -401,127 +434,133 @@ func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]
 	var conflicts []bareConflict
 	var unmatched []string
 
-	entries, err := os.ReadDir(cfg.TVSource)
-	if err != nil {
-		return nil, nil, nil
-	}
-
 	// Scan tv_linked once so findMatch doesn't re-read it for every bare file.
 	var linkedEntries []os.DirEntry
 	if info, err := os.Stat(cfg.TVLinked); err == nil && info.IsDir() {
 		linkedEntries, _ = os.ReadDir(cfg.TVLinked)
 	}
 
-	for _, e := range entries {
-		if !e.Type().IsRegular() || !common.IsVideo(e.Name()) || common.IsSample(e.Name()) {
-			continue
-		}
-		r := ParseBareEpisode(e.Name())
-		if r == nil {
-			unmatched = append(unmatched, e.Name())
+	for _, srcDir := range cfg.TVSources {
+		entries, err := os.ReadDir(srcDir)
+		if err != nil {
 			continue
 		}
 
-		rawShow := r.Show
-		resolved, _ := resolver.ResolveTVName(
-			rawShow, cfg.TVNameOverrides, cfg.TMDBApiKey, cfg.TMDBConfidence, log)
-		show := common.Sanitize(resolved)
-		matched := findMatch(show, grouped, linkedEntries)
-		if matched != "" && matched != show {
-			show = matched
-		}
-
-		sp := filepath.Join(cfg.TVLinked, show, fmt.Sprintf("Season %02d", r.Season))
-		var canon string
-		if matched != "" {
-			if _, ok := grouped[matched]; ok {
-				canon = matched
+		for _, e := range entries {
+			if !e.Type().IsRegular() || !common.IsVideo(e.Name()) || common.IsSample(e.Name()) {
+				continue
 			}
-		}
+			r := ParseBareEpisode(e.Name())
+			if r == nil {
+				unmatched = append(unmatched, e.Name())
+				continue
+			}
 
-		if canon == "" {
-			// Show not in grouped — check if output season dir already exists.
-			if common.IsBareDir(sp) {
-				if epSymlinkExists(sp, r.Episode, r.Season) {
-					continue
+			rawShow := r.Show
+			resolved, _ := resolver.ResolveTVName(
+				rawShow, cfg.TVNameOverrides, cfg.TMDBApiKey, cfg.TMDBConfidence, log)
+			show := common.Sanitize(resolved)
+			matched := findMatch(show, grouped, linkedEntries)
+			if matched != "" && matched != show {
+				show = matched
+			}
+
+			sp := filepath.Join(cfg.TVLinked, show, fmt.Sprintf("Season %02d", r.Season))
+			var canon string
+			if matched != "" {
+				if _, ok := grouped[matched]; ok {
+					canon = matched
 				}
-				conflicts = append(conflicts, bareConflict{
-					show: show, season: r.Season, episode: r.Episode,
-					quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
-					ctype: "bare_dir", info: conflictInfo{seaDir: sp},
-					secondEp: r.SecondEp,
-				})
-			} else {
-				newEps = append(newEps, bareNew{
-					show: show, season: r.Season, episode: r.Episode,
-					quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
-					secondEp: r.SecondEp,
-				})
 			}
-			continue
-		}
 
-		// Find the source folder for this season.
-		var sfolder string
-		for _, se := range grouped[canon] {
-			if se.season == r.Season {
-				sfolder = se.folder
-				break
-			}
-		}
-		if sfolder == "" {
-			newEps = append(newEps, bareNew{
-				show: show, season: r.Season, episode: r.Episode,
-				quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
-				secondEp: r.SecondEp,
-			})
-			continue
-		}
+			bareFilePath := filepath.Join(srcDir, e.Name())
 
-		srcPath := filepath.Join(cfg.TVSource, sfolder)
-		exists, eq := epInFolder(srcPath, r.Episode, r.Season)
-		if exists {
-			if eq != "" && r.Quality != "" && strings.ToUpper(eq) != strings.ToUpper(r.Quality) {
+			if canon == "" {
+				// Show not in grouped — check if output season dir already exists.
 				if common.IsBareDir(sp) {
-					lname := BuildLinkName(show, r.Season, r.Episode, r.Quality,
-						filepath.Ext(e.Name()), r.SecondEp)
-					if common.IsSymlink(filepath.Join(sp, lname)) {
+					if epSymlinkExists(sp, r.Episode, r.Season) {
 						continue
 					}
 					conflicts = append(conflicts, bareConflict{
 						show: show, season: r.Season, episode: r.Episode,
-						quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
+						quality: r.Quality, filePath: bareFilePath,
+						ctype: "bare_dir", info: conflictInfo{seaDir: sp},
+						secondEp: r.SecondEp,
+					})
+				} else {
+					newEps = append(newEps, bareNew{
+						show: show, season: r.Season, episode: r.Episode,
+						quality: r.Quality, filePath: bareFilePath,
+						secondEp: r.SecondEp,
+					})
+				}
+				continue
+			}
+
+			// Find the source folder for this season.
+			var sfolder string
+			var sSourceDir string
+			for _, se := range grouped[canon] {
+				if se.season == r.Season {
+					sfolder = se.folder
+					sSourceDir = se.sourceDir
+					break
+				}
+			}
+			if sfolder == "" {
+				newEps = append(newEps, bareNew{
+					show: show, season: r.Season, episode: r.Episode,
+					quality: r.Quality, filePath: bareFilePath,
+					secondEp: r.SecondEp,
+				})
+				continue
+			}
+
+			srcPath := filepath.Join(sSourceDir, sfolder)
+			exists, eq := epInFolder(srcPath, r.Episode, r.Season)
+			if exists {
+				if eq != "" && r.Quality != "" && strings.ToUpper(eq) != strings.ToUpper(r.Quality) {
+					if common.IsBareDir(sp) {
+						lname := BuildLinkName(show, r.Season, r.Episode, r.Quality,
+							filepath.Ext(e.Name()), r.SecondEp)
+						if common.IsSymlink(filepath.Join(sp, lname)) {
+							continue
+						}
+						conflicts = append(conflicts, bareConflict{
+							show: show, season: r.Season, episode: r.Episode,
+							quality: r.Quality, filePath: bareFilePath,
+							ctype: "bare_dir", info: conflictInfo{seaDir: sp},
+							secondEp: r.SecondEp,
+						})
+					} else {
+						conflicts = append(conflicts, bareConflict{
+							show: show, season: r.Season, episode: r.Episode,
+							quality: r.Quality, filePath: bareFilePath,
+							ctype: "quality", info: conflictInfo{folder: sfolder, quality: eq},
+							secondEp: r.SecondEp,
+						})
+					}
+				}
+				// Same quality already covered — skip silently.
+			} else {
+				if common.IsBareDir(sp) {
+					if epSymlinkExists(sp, r.Episode, r.Season) {
+						continue
+					}
+					conflicts = append(conflicts, bareConflict{
+						show: show, season: r.Season, episode: r.Episode,
+						quality: r.Quality, filePath: bareFilePath,
 						ctype: "bare_dir", info: conflictInfo{seaDir: sp},
 						secondEp: r.SecondEp,
 					})
 				} else {
 					conflicts = append(conflicts, bareConflict{
 						show: show, season: r.Season, episode: r.Episode,
-						quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
-						ctype: "quality", info: conflictInfo{folder: sfolder, quality: eq},
+						quality: r.Quality, filePath: bareFilePath,
+						ctype: "missing", info: conflictInfo{folder: sfolder},
 						secondEp: r.SecondEp,
 					})
 				}
-			}
-			// Same quality already covered — skip silently.
-		} else {
-			if common.IsBareDir(sp) {
-				if epSymlinkExists(sp, r.Episode, r.Season) {
-					continue
-				}
-				conflicts = append(conflicts, bareConflict{
-					show: show, season: r.Season, episode: r.Episode,
-					quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
-					ctype: "bare_dir", info: conflictInfo{seaDir: sp},
-					secondEp: r.SecondEp,
-				})
-			} else {
-				conflicts = append(conflicts, bareConflict{
-					show: show, season: r.Season, episode: r.Episode,
-					quality: r.Quality, filePath: filepath.Join(cfg.TVSource, e.Name()),
-					ctype: "missing", info: conflictInfo{folder: sfolder},
-					secondEp: r.SecondEp,
-				})
 			}
 		}
 	}
@@ -640,7 +679,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto,
 				log.Normal("    [WATCH] Skipped conflict: %s S%02dE%02d, needs manual review", c.show, c.season, c.episode)
 				continue
 			}
-			if !auto {
+			if cfg.PolicyConflictConversion == "prompt" && !auto {
 				log.Normal("\n  %s / %s / E%02d", c.show, sl, c.episode)
 				log.Normal("    File: %s", filepath.Base(c.filePath))
 				if c.ctype == "quality" {
@@ -668,7 +707,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto,
 			}
 
 		case "bare_dir":
-			if auto || nonInteractive {
+			if auto || nonInteractive || cfg.PolicyConflictConversion == "auto" {
 				lp := filepath.Join(sp, ln)
 				lpSafe, err := common.NewSafePath(lp, cfg.OutputDirs)
 				if err != nil {
@@ -703,7 +742,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto,
 // Warnings
 // ---------------------------------------------------------------------------
 
-func warnings(grouped map[string][]seasonEntry, pt []string) []string {
+func warnings(grouped map[string][]seasonEntry, pt []passthroughEntry) []string {
 	var w []string
 	for show, seasons := range grouped {
 		seen := map[int]string{}
@@ -721,9 +760,9 @@ func warnings(grouped map[string][]seasonEntry, pt []string) []string {
 		gn[normCompare(n)] = n
 	}
 	for _, p := range pt {
-		n := normCompare(p)
+		n := normCompare(p.name)
 		if canonical, ok := gn[n]; ok {
-			w = append(w, fmt.Sprintf("Name overlap: '%s' and unprocessed '%s'", canonical, p))
+			w = append(w, fmt.Sprintf("Name overlap: '%s' and unprocessed '%s'", canonical, p.name))
 		}
 	}
 	return w
@@ -766,7 +805,7 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 
 	for _, show := range showNames {
 		seasons := grouped[show]
-		ss := resolveDupes(show, seasons, dryRun, auto, nonInteractive, log)
+		ss := resolveDupes(show, seasons, cfg, dryRun, auto, nonInteractive, log)
 		shows++
 
 		showDirPath := filepath.Join(cfg.TVLinked, show)
@@ -783,7 +822,7 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 
 		for _, s := range ss {
 			lp := filepath.Join(cfg.TVLinked, show, fmt.Sprintf("Season %02d", s.season))
-			tgt := filepath.Join(cfg.TVSource, s.folder)
+			tgt := filepath.Join(s.sourceDir, s.folder)
 			lpSafe, err := common.NewSafePath(lp, cfg.OutputDirs)
 			if err != nil {
 				log.Normal("[ERROR] %v", err)
@@ -800,11 +839,11 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 
 	// Passthrough: unprocessed folders passed through as-is.
 	ptCount := 0
-	sort.Strings(pt)
+	sort.Slice(pt, func(i, j int) bool { return pt[i].name < pt[j].name })
 	for _, entry := range pt {
-		cn := common.CleanPassthroughName(entry)
+		cn := common.CleanPassthroughName(entry.name)
 		lp := filepath.Join(cfg.TVLinked, cn)
-		tgt := filepath.Join(cfg.TVSource, entry)
+		tgt := filepath.Join(entry.sourceDir, entry.name)
 		lpSafe, err := common.NewSafePath(lp, cfg.OutputDirs)
 		if err != nil {
 			continue
@@ -833,7 +872,7 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 			common.EnsureDir(sdSafe, dryRun)
 		}
 		for _, ep := range m.episodes {
-			op := filepath.Join(cfg.MoviesSource, m.folder, ep.file)
+			op := filepath.Join(m.sourceDir, m.folder, ep.file)
 			ext := filepath.Ext(ep.file)
 			var ln string
 			if common.ReSxxExx.MatchString(ep.file) {
@@ -874,13 +913,12 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 		shows, seasonsLinked, ptCount, miniCount, newCount, conflictCount, len(unmatched))
 
 	return map[string]int{
-		"shows":      shows,
-		"seasons":    seasonsLinked,
+		"shows":       shows,
+		"seasons":     seasonsLinked,
 		"passthrough": ptCount,
-		"miniseries": miniCount,
-		"bare_new":   newCount,
-		"conflicts":  conflictCount,
-		"unmatched":  len(unmatched),
+		"miniseries":  miniCount,
+		"bare_new":    newCount,
+		"conflicts":   conflictCount,
+		"unmatched":   len(unmatched),
 	}
 }
-
