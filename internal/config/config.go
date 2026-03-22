@@ -52,6 +52,13 @@ type rawHealth struct {
 	Enabled        *bool  `toml:"enabled"`
 	MinSourceFiles int    `toml:"min_source_files"`
 	SentinelFile   string `toml:"sentinel_file"`
+	Port           int    `toml:"port"`
+}
+
+type rawWatch struct {
+	Enabled             *bool `toml:"enabled"`
+	DebounceSeconds     int   `toml:"debounce_seconds"`
+	PollIntervalSeconds int   `toml:"poll_interval_seconds"`
 }
 
 type rawSync struct {
@@ -65,6 +72,7 @@ type rawConfig struct {
 	Overrides rawOverrides `toml:"overrides"`
 	Health    rawHealth    `toml:"health"`
 	Sync      rawSync      `toml:"sync"`
+	Watch     rawWatch     `toml:"watch"`
 }
 
 // Config is the resolved, validated configuration for a medialnk run.
@@ -103,9 +111,15 @@ type Config struct {
 	HealthEnabled      bool
 	HealthMinFiles     int
 	HealthSentinelFile string
+	HealthPort         int // HTTP health endpoint port, 0 = disabled
 
 	// Sync behavior
 	CleanAfterSync bool
+
+	// Watch mode
+	WatchEnabled      bool
+	WatchDebounce     int // seconds, default 30
+	WatchPollInterval int // seconds, default 60
 }
 
 func resolve(val, defaultVal, root string) string {
@@ -191,6 +205,20 @@ func Load(path string) (*Config, error) {
 		cfg.HealthMinFiles = raw.Health.MinSourceFiles
 	}
 	cfg.HealthSentinelFile = raw.Health.SentinelFile
+	cfg.HealthPort = raw.Health.Port
+
+	// Watch mode — disabled by default, must be explicitly enabled.
+	if raw.Watch.Enabled != nil {
+		cfg.WatchEnabled = *raw.Watch.Enabled
+	}
+	cfg.WatchDebounce = 30
+	if raw.Watch.DebounceSeconds > 0 {
+		cfg.WatchDebounce = raw.Watch.DebounceSeconds
+	}
+	cfg.WatchPollInterval = 60
+	if raw.Watch.PollIntervalSeconds > 0 {
+		cfg.WatchPollInterval = raw.Watch.PollIntervalSeconds
+	}
 
 	// Sync behavior — clean_after_sync defaults to false.
 	if raw.Sync.CleanAfterSync != nil {

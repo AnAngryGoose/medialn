@@ -173,7 +173,7 @@ func resolveVersions(seen map[string][]movieEntry) []movieEntry {
 }
 
 // Run executes the full movies pipeline and returns summary counts.
-func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) map[string]int {
+func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *state.Collector) map[string]int {
 	// Ensure output directory exists.
 	mlSafe, err := common.NewSafePath(cfg.MoviesLinked, cfg.OutputDirs)
 	if err != nil {
@@ -255,6 +255,11 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) m
 					label = fmt.Sprintf("%s (%s)", t, y)
 				} else {
 					label = t
+				}
+				if nonInteractive {
+					log.Normal("    [WATCH] Skipped ambiguous Part.N: %s", label)
+					col.RecordMovieFlagged(entryName, "ambiguous Part.N, needs manual review")
+					continue
 				}
 				if auto {
 					log.Verbose("    [AUTO] %s -> movie", label)

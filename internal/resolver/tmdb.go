@@ -45,7 +45,21 @@ func ClearCache() {
 
 var httpClient = &http.Client{Timeout: 8 * time.Second}
 
+// Rate limiter: minimum 250ms between TMDB API calls (~4 req/sec).
+// Well within TMDB's free tier limit of ~40 per 10 seconds.
+var (
+	tmdbRateMu   sync.Mutex
+	tmdbLastCall time.Time
+)
+
 func tmdbGet(endpoint string, query string, apiKey string) ([]byte, error) {
+	tmdbRateMu.Lock()
+	if elapsed := time.Since(tmdbLastCall); elapsed < 250*time.Millisecond {
+		time.Sleep(250*time.Millisecond - elapsed)
+	}
+	tmdbLastCall = time.Now()
+	tmdbRateMu.Unlock()
+
 	params := url.Values{}
 	params.Set("query", query)
 	params.Set("api_key", apiKey)

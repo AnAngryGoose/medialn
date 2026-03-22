@@ -104,6 +104,13 @@ Dry run first, review output, add overrides to config if needed, then run live.
 - Optional sentinel file check catches silently unmounted mergerfs drives
 - Aborts with a clear error rather than syncing against an empty mount point
 
+**Watch mode (daemon)**
+- Polls source directories for new content and auto-syncs when downloads complete
+- Three-layer detection: debounce timer, file size stability check, incomplete download markers (`.!qB`, `.part`, `.aria2`, `_UNPACK_`)
+- Non-interactive: ambiguous items are skipped and logged for manual review, not auto-accepted
+- Optional HTTP health endpoint for Docker HEALTHCHECK and external monitoring
+- Polling-based (not inotify) for reliable operation on MergerFS/FUSE filesystems
+
 **Config overrides**
 - Movie title overrides for names that parse incorrectly
 - TV name overrides for canonical show name corrections
@@ -130,6 +137,9 @@ medialnk orphans --json        # Machine-readable output
 medialnk orphans -q            # Counts only
 
 medialnk validate              # Check config, paths, and PathGuard
+
+medialnk watch                 # Daemon: poll source dirs, auto-sync new content
+                               # Requires [watch] enabled = true in config
 
 medialnk test-library /path    # Generate a fake library for testing
 medialnk test-library /path --reset
@@ -161,9 +171,15 @@ confidence_check = true
 enabled = true
 min_source_files = 10                   # abort sync if source has fewer video files
 sentinel_file = ""                      # optional: path that must exist before syncing
+port = 0                                # HTTP health endpoint port, 0 = disabled (for watch mode)
 
 [sync]
 clean_after_sync = false                # remove broken symlinks automatically after sync
+
+[watch]
+enabled = false                         # must be true for `medialnk watch` to start
+debounce_seconds = 30                   # wait after detecting new content before processing
+poll_interval_seconds = 60              # how often to scan source directories
 
 [logging]
 log_dir = "logs"
@@ -183,6 +199,16 @@ verbosity = "normal"                    # quiet / normal / verbose / debug
 
 ## Automated runs
 
+**Watch mode (recommended):**
+```bash
+# Start the daemon — polls source dirs, auto-syncs when new content arrives
+medialnk watch
+
+# Ambiguous items (Part.N, quality conflicts) are skipped and logged for manual review
+# HTTP health endpoint available when [health] port is set (for Docker HEALTHCHECK)
+```
+
+**One-shot (cron or torrent client hook):**
 ```bash
 # qBittorrent completion hook
 medialnk sync --yes -q

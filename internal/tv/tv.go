@@ -215,7 +215,7 @@ func scanMiniseries(cfg *config.Config) map[string]miniEntry {
 // Duplicate season resolution
 // ---------------------------------------------------------------------------
 
-func resolveDupes(show string, seasons []seasonEntry, dryRun, auto bool, log Log) []seasonEntry {
+func resolveDupes(show string, seasons []seasonEntry, dryRun, auto, nonInteractive bool, log Log) []seasonEntry {
 	byS := map[int][]string{}
 	for _, s := range seasons {
 		byS[s.season] = append(byS[s.season], s.folder)
@@ -241,9 +241,11 @@ func resolveDupes(show string, seasons []seasonEntry, dryRun, auto bool, log Log
 			}
 			log.Normal("      [%d] %s  (%s)", i+1, f, q)
 		}
-		if dryRun || auto {
+		if dryRun || auto || nonInteractive {
 			if dryRun {
 				log.Normal("      (dry-run: first)")
+			} else if nonInteractive {
+				log.Normal("      (non-interactive: first)")
 			} else {
 				log.Normal("      (auto: first)")
 			}
@@ -592,7 +594,7 @@ func handleNew(newEps []bareNew, cfg *config.Config, dryRun bool, log Log, col *
 	return count
 }
 
-func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) int {
+func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *state.Collector) int {
 	if len(conflicts) == 0 {
 		return 0
 	}
@@ -634,6 +636,10 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto 
 				}
 				continue
 			}
+			if nonInteractive {
+				log.Normal("    [WATCH] Skipped conflict: %s S%02dE%02d, needs manual review", c.show, c.season, c.episode)
+				continue
+			}
 			if !auto {
 				log.Normal("\n  %s / %s / E%02d", c.show, sl, c.episode)
 				log.Normal("    File: %s", filepath.Base(c.filePath))
@@ -662,7 +668,7 @@ func handleConflicts(conflicts []bareConflict, cfg *config.Config, dryRun, auto 
 			}
 
 		case "bare_dir":
-			if auto {
+			if auto || nonInteractive {
 				lp := filepath.Join(sp, ln)
 				lpSafe, err := common.NewSafePath(lp, cfg.OutputDirs)
 				if err != nil {
@@ -736,7 +742,7 @@ func secondEpPtr(v int) *int {
 // ---------------------------------------------------------------------------
 
 // Run executes the full two-pass TV pipeline and returns summary counts.
-func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) map[string]int {
+func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *state.Collector) map[string]int {
 	tvSafe, err := common.NewSafePath(cfg.TVLinked, cfg.OutputDirs)
 	if err != nil {
 		log.Normal("[ERROR] tv_linked is not a registered output: %v", err)
@@ -760,7 +766,7 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) m
 
 	for _, show := range showNames {
 		seasons := grouped[show]
-		ss := resolveDupes(show, seasons, dryRun, auto, log)
+		ss := resolveDupes(show, seasons, dryRun, auto, nonInteractive, log)
 		shows++
 
 		showDirPath := filepath.Join(cfg.TVLinked, show)
@@ -850,7 +856,7 @@ func Run(cfg *config.Config, dryRun, auto bool, log Log, col *state.Collector) m
 	// Pass 2: bare episode files.
 	newEps, conflicts, unmatched := scanBare(grouped, cfg, log)
 	newCount := handleNew(newEps, cfg, dryRun, log, col)
-	conflictCount := handleConflicts(conflicts, cfg, dryRun, auto, log, col)
+	conflictCount := handleConflicts(conflicts, cfg, dryRun, auto, nonInteractive, log, col)
 	col.RecordTVUnmatched(unmatched)
 
 	if len(unmatched) > 0 {

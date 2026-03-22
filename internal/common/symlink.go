@@ -155,8 +155,9 @@ func CleanBrokenSymlinks(directory SafePath, hostRoot, containerRoot string) (in
 
 // ValidateOutputDir checks a directory for real (non-symlink) video files.
 // Returns count found. If count > 0 and not dry-run, prompts the user.
+// When nonInteractive is true, logs a warning and continues without prompting.
 // Returns an error if the user declines to continue.
-func ValidateOutputDir(directory string, dryRun bool) (int, error) {
+func ValidateOutputDir(directory string, dryRun, nonInteractive bool) (int, error) {
 	info, err := os.Stat(directory)
 	if err != nil || !info.IsDir() {
 		return 0, nil
@@ -187,6 +188,10 @@ func ValidateOutputDir(directory string, dryRun bool) (int, error) {
 	}
 	fmt.Println("\n  Output dirs should only contain symlinks.")
 	fmt.Println("  If this IS your real library, your config is wrong.")
+	if nonInteractive {
+		fmt.Print("  (non-interactive, continuing)\n\n")
+		return len(real), nil
+	}
 	if dryRun {
 		fmt.Print("  (dry-run, continuing)\n\n")
 		return len(real), nil

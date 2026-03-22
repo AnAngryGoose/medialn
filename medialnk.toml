@@ -46,3 +46,25 @@ verbosity = "-v"
 
 [overrides.movie_titles]
 # "parsed title" = { title = "Correct Title", year = 2024 }
+
+[health]
+# Pre-sync validation of source directories.
+enabled = true
+# Abort if a source directory has fewer video files than this (catches unmounted drives).
+min_source_files = 10
+# Optional file that must exist before sync proceeds (e.g. a sentinel on a mergerfs pool).
+sentinel_file = ""
+# HTTP health endpoint port for monitoring. 0 = disabled. Set for Docker HEALTHCHECK.
+port = 0
+
+[sync]
+# Automatically remove broken symlinks after each sync.
+clean_after_sync = false
+
+[watch]
+# Must be true for `medialnk watch` to start. Prevents accidental daemon starts.
+enabled = false
+# Wait this long after detecting new content before processing (seconds).
+debounce_seconds = 30
+# How often to scan source directories for changes (seconds).
+poll_interval_seconds = 60

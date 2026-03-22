@@ -119,7 +119,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, d := range cfg.OutputDirs {
-		if _, err := common.ValidateOutputDir(d, syncDryRun); err != nil {
+		if _, err := common.ValidateOutputDir(d, syncDryRun, false); err != nil {
 			os.Exit(1)
 		}
 	}
@@ -127,10 +127,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 	col := state.New()
 
 	if !syncTVOnly {
-		movies.Run(cfg, syncDryRun, syncYes, log, col)
+		movies.Run(cfg, syncDryRun, syncYes, false, log, col)
 	}
 	if !syncMoviesOnly {
-		tv.Run(cfg, syncDryRun, syncYes, log, col)
+		tv.Run(cfg, syncDryRun, syncYes, false, log, col)
 	}
 
 	// Write state files (skip in dry-run).
