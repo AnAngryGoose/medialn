@@ -10,6 +10,7 @@ import (
 
 	"github.com/AnAngryGoose/medialnk/internal/common"
 	"github.com/AnAngryGoose/medialnk/internal/config"
+	"github.com/AnAngryGoose/medialnk/internal/movies"
 	"github.com/AnAngryGoose/medialnk/internal/resolver"
 	"github.com/AnAngryGoose/medialnk/internal/state"
 )
@@ -429,10 +430,16 @@ type bareNew struct {
 	secondEp int
 }
 
-func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]bareNew, []bareConflict, []string) {
+type misplacedMovie struct {
+	name     string
+	filePath string
+}
+
+func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]bareNew, []bareConflict, []string, []misplacedMovie) {
 	var newEps []bareNew
 	var conflicts []bareConflict
 	var unmatched []string
+	var misplaced []misplacedMovie
 
 	// Scan tv_linked once so findMatch doesn't re-read it for every bare file.
 	var linkedEntries []os.DirEntry
@@ -452,7 +459,13 @@ func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]
 			}
 			r := ParseBareEpisode(e.Name())
 			if r == nil {
-				unmatched = append(unmatched, e.Name())
+				t := movies.Title(e.Name())
+				y := movies.Year(e.Name())
+				if t != "" && y != "" {
+					misplaced = append(misplaced, misplacedMovie{e.Name(), filepath.Join(srcDir, e.Name())})
+				} else {
+					unmatched = append(unmatched, e.Name())
+				}
 				continue
 			}
 
@@ -564,7 +577,7 @@ func scanBare(grouped map[string][]seasonEntry, cfg *config.Config, log Log) ([]
 			}
 		}
 	}
-	return newEps, conflicts, unmatched
+	return newEps, conflicts, unmatched, misplaced
 }
 
 func handleNew(newEps []bareNew, cfg *config.Config, dryRun bool, log Log, col *state.Collector) int {
@@ -893,10 +906,46 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 	}
 
 	// Pass 2: bare episode files.
-	newEps, conflicts, unmatched := scanBare(grouped, cfg, log)
+	newEps, conflicts, unmatched, misplaced := scanBare(grouped, cfg, log)
 	newCount := handleNew(newEps, cfg, dryRun, log, col)
 	conflictCount := handleConflicts(conflicts, cfg, dryRun, auto, nonInteractive, log, col)
 	col.RecordTVUnmatched(unmatched)
+
+	// Link misplaced movies (bare movie files in TV source).
+	misplacedCount := 0
+	if len(misplaced) > 0 {
+		log.Normal("  [MISPLACED] %d bare movie(s) in TV source", len(misplaced))
+		for _, m := range misplaced {
+			t := movies.Title(m.name)
+			y := movies.Year(m.name)
+			q := common.ExtractQuality(m.name)
+			folder := fmt.Sprintf("%s (%s)", t, y)
+			ext := filepath.Ext(m.filePath)
+			var linkName string
+			if q != "" {
+				linkName = fmt.Sprintf("%s - %s%s", folder, q, ext)
+			} else {
+				linkName = folder + ext
+			}
+			linkDirPath := filepath.Join(cfg.MoviesLinked, folder)
+			linkDirSafe, err := common.NewSafePath(linkDirPath, cfg.OutputDirs)
+			if err != nil {
+				log.Verbose("    [SKIP] %s: %v", m.name, err)
+				continue
+			}
+			common.EnsureDir(linkDirSafe, dryRun)
+			linkFullPath := filepath.Join(linkDirPath, linkName)
+			linkSafe, err := common.NewSafePath(linkFullPath, cfg.OutputDirs)
+			if err != nil {
+				continue
+			}
+			if common.MakeSymlink(linkSafe, m.filePath, dryRun, cfg.HostRoot, cfg.ContainerRoot) {
+				col.RecordMovieLink(t, y, q, m.filePath, linkFullPath)
+				misplacedCount++
+				log.Verbose("    %s -> %s", m.name, folder)
+			}
+		}
+	}
 
 	if len(unmatched) > 0 {
 		log.Normal("  [UNMATCHED] %d bare file(s):", len(unmatched))
@@ -909,8 +958,8 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 		log.Normal("  [WARN] %s", w)
 	}
 
-	log.Normal("[TV] %d shows (%d seasons), %d unprocessed, %d miniseries, %d bare new, %d conflicts, %d unmatched",
-		shows, seasonsLinked, ptCount, miniCount, newCount, conflictCount, len(unmatched))
+	log.Normal("[TV] %d shows (%d seasons), %d unprocessed, %d miniseries, %d bare new, %d conflicts, %d misplaced, %d unmatched",
+		shows, seasonsLinked, ptCount, miniCount, newCount, conflictCount, misplacedCount, len(unmatched))
 
 	return map[string]int{
 		"shows":       shows,
@@ -919,6 +968,7 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 		"miniseries":  miniCount,
 		"bare_new":    newCount,
 		"conflicts":   conflictCount,
+		"misplaced":   misplacedCount,
 		"unmatched":   len(unmatched),
 	}
 }

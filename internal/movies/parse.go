@@ -45,7 +45,7 @@ func normalize(name string) string {
 
 // year extracts the first 4-digit year from name after normalization.
 // Returns empty string if none found.
-func year(name string) string {
+func Year(name string) string {
 	m := reYear.FindStringSubmatch(normalize(name))
 	if m == nil {
 		return ""
@@ -54,7 +54,7 @@ func year(name string) string {
 }
 
 // title extracts a clean human-readable title from a scene-format name.
-func title(name string) string {
+func Title(name string) string {
 	name = strings.TrimSuffix(normalize(name), filepath.Ext(name))
 	s := reStrip.ReplaceAllString(name, "")
 	if !strings.Contains(s, " ") {

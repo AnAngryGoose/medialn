@@ -1,6 +1,6 @@
 # medialnk Project Overview
 
-**Version:** 2.9.0
+**Version:** 2.9.1
 **Repository:** https://github.com/AnAngryGoose/medialnk
 **Language:** Go
 **Dependencies:** BurntSushi/toml, spf13/cobra (build-time only, static binary output)
@@ -433,7 +433,7 @@ Complete catalogue of every exported and significant unexported function, groupe
 | Function | Description |
 |---|---|
 | `IsSample(filename)` | Returns true if the filename matches the sample file pattern. |
-| `EpisodeInfo(filename, includePart)` | Parses `(season, episode)` from a filename using a regex cascade: SxxExx → NxNN → Episode.N → bare E01 → NofN → Part.N. Returns nil if nothing matches. |
+| `EpisodeInfo(filename, includePart)` | Parses `(season, episode)` from a filename using a regex cascade: SxxExx → NxNN → Episode.N → bare E01 → NofN → SceneN → Part.N. Returns nil if nothing matches. |
 | `ExtractQuality(name)` | Returns the first quality tag found in the name (uppercased), e.g. `1080P`, `WEB-DL`. Empty string if none. |
 | `Sanitize(name)` | Replaces filesystem-illegal characters (`/:\?*"<>\|`) with `-`. |
 | `CleanPassthroughName(folderName)` | Converts dots to spaces (only if name has no spaces), then normalizes whitespace. No metadata stripping. |
@@ -450,6 +450,7 @@ Complete catalogue of every exported and significant unexported function, groupe
 | `ReBareEpisode` | `E01`, `E12` not preceded by S/digit |
 | `ReMultiEp` | `-E06`, `.E06` (multi-episode suffix) |
 | `ReNof` | `1of6`, `(2of8)` |
+| `ReScene` | `Scene1`, `Scene.2`, `Scene_3` (miniseries scene numbering) |
 | `RePart` | `Part.1`, `Pt 2`, etc. |
 
 ---
@@ -471,8 +472,8 @@ Complete catalogue of every exported and significant unexported function, groupe
 | Function | Description |
 |---|---|
 | `normalize(name)` | Replaces underscores with dots so older scene releases parse correctly. |
-| `year(name)` | Extracts the first 4-digit year (1900–2099) from a normalized filename. Returns empty string if none. |
-| `title(name)` | Extracts a clean human-readable title from a scene-format name by stripping noise tags, release group, year, codec, etc. |
+| `Year(name)` | Extracts the first 4-digit year (1900–2099) from a normalized filename. Returns empty string if none. Exported for use by the TV package for misplaced movie detection. |
+| `Title(name)` | Extracts a clean human-readable title from a scene-format name by stripping noise tags, release group, year, codec, etc. Exported for use by the TV package for misplaced movie detection. |
 | `isMiniseries(folder)` | Returns true if a folder contains ≥2 video files with episode notation (indicating TV, not movie). |
 | `isAmbiguousParts(folder)` | Returns true + sorted filenames if a folder contains ≥2 Part.N video files with no other episode notation (ambiguous: movie or TV). |
 
@@ -486,7 +487,7 @@ Complete catalogue of every exported and significant unexported function, groupe
 | `resolveVersions(seen)` | Flattens the grouped `map[key][]movieEntry` into a sorted slice, assigning quality labels to multi-version groups and numbering same-quality duplicates. |
 | `Run(cfg, dryRun, auto, nonInteractive, log, col)` | Executes the full movie pipeline: scan → link → handle ambiguous Part.N → TMDB yearless resolution. Records all links, skips, flags, and TMDB misses to the state collector. When `nonInteractive` is true, skips ambiguous Part.N entries (logs `[WATCH]` and flags for review) instead of prompting. Returns summary count map. |
 | `routeMovie(entryName, t, y, sourceDir, cfg, dryRun, log, col)` | Handles an ambiguous Part.N folder confirmed as a movie: finds the largest video and creates the symlink. `sourceDir` is the absolute path of the source directory containing the entry. Records to state collector. |
-| `tmdbResolve(noYear, cfg, dryRun, log, col)` | Concurrently resolves yearless flagged entries via TMDB (up to 8 goroutines). Accepts `[]flaggedItem` (each carries name and sourceDir). On TMDB hit, links under canonical name. On TMDB miss, links under parsed name as unverified fallback. Records links, unverified links, and misses to state collector. Returns count resolved. |
+| `tmdbResolve(noYear, cfg, dryRun, log, col)` | Concurrently resolves yearless flagged entries via TMDB (up to 8 goroutines). Accepts `[]flaggedItem` (each carries name and sourceDir). On TMDB hit, links under canonical name. On TMDB miss, links under parsed name as unverified fallback. Records links, unverified links, and misses to state collector. Returns `(count, handled)` where `handled` is a `map[string]bool` of entry names that were processed — used by `Run()` to avoid double-flagging. |
 
 ---
 
@@ -524,11 +525,11 @@ Complete catalogue of every exported and significant unexported function, groupe
 | `scanMiniseries(cfg)` | Reads all `movies_source` directories for folders containing ≥2 episode files (miniseries). Each entry tracks its source directory. Returns a map of show name → episode list. |
 | `resolveDupes(show, seasons, cfg, dryRun, auto, nonInteractive, log)` | For shows with multiple folders for the same season number, uses `cfg.PolicyDuplicateSeason` to determine behavior: "skip" picks first, "highest" picks best quality, "prompt" asks the user. In dry-run/auto/non-interactive mode, prompts are always skipped. Returns the deduplicated season list. |
 | `convertSeason(show, snum, path, cfg, dryRun, log, col)` | Replaces a season folder symlink with a real directory, re-linking all episodes individually. Records each re-linked episode to state collector (only when ParseBareEpisode succeeds). |
-| `scanBare(grouped, cfg, log)` | Pass 2 scanner: reads bare episode files in `tv_source`, classifies each as new, conflict, or unmatched. Returns all three lists. |
+| `scanBare(grouped, cfg, log)` | Pass 2 scanner: reads bare episode files in `tv_source`, classifies each as new, conflict, unmatched, or misplaced movie. Returns all four lists. Files with no episode notation but a parseable title+year are classified as misplaced movies. |
 | `handleNew(newEps, cfg, dryRun, log, col)` | Creates show/season directories and symlinks for all new bare episodes (no conflict with Pass 1). Records to state collector. Returns count linked. |
 | `handleConflicts(conflicts, cfg, dryRun, auto, nonInteractive, log, col)` | Resolves conflict episodes: quality variants and missing episodes trigger `convertSeason` then add the link; bare_dir episodes add directly to an existing real season dir. When `nonInteractive` is true, skips quality/missing conflicts (logs `[WATCH]` for review) and auto-adds bare_dir entries. Records to state collector. Returns count resolved. |
 | `warnings(grouped, pt)` | Detects and returns warning strings for: duplicate season folders, name overlap between grouped shows and passthrough folders. |
-| `Run(cfg, dryRun, auto, nonInteractive, log, col)` | Executes the full two-pass TV pipeline: Pass 1 (season symlinks) → passthrough → miniseries → Pass 2 (bare files). When `nonInteractive` is true, skips ambiguous prompts and logs for manual review. Records all links, skips, and unmatched to state collector. Returns summary count map. |
+| `Run(cfg, dryRun, auto, nonInteractive, log, col)` | Executes the full two-pass TV pipeline: Pass 1 (season symlinks) → passthrough → miniseries → Pass 2 (bare files + misplaced movie linking). Misplaced movies are linked to `movies-linked/` with proper naming. When `nonInteractive` is true, skips ambiguous prompts and logs for manual review. Records all links, skips, and unmatched to state collector. Returns summary count map including `"misplaced"` count. |
 
 ---
 

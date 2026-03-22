@@ -75,8 +75,8 @@ func scan(cfg *config.Config) ([]movieEntry, []flaggedItem, []string, []ambiguou
 					skipped = append(skipped, name)
 					continue
 				}
-				y := year(name)
-				t := title(name)
+				y := Year(name)
+				t := Title(name)
 				if override, ok := cfg.MovieTitleOverrides[t]; ok {
 					t = override
 				}
@@ -110,11 +110,11 @@ func scan(cfg *config.Config) ([]movieEntry, []flaggedItem, []string, []ambiguou
 					continue
 				}
 				primary := common.LargestVideo(vids)
-				y := year(name)
+				y := Year(name)
 				if y == "" {
-					y = year(primary.Name)
+					y = Year(primary.Name)
 				}
-				t := title(name)
+				t := Title(name)
 				if override, ok := cfg.MovieTitleOverrides[t]; ok {
 					t = override
 				}
@@ -243,13 +243,14 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 		}
 	}
 
-	// Flagged entries
+	// Flagged entries — record non-yearless immediately; defer yearless until after TMDB.
 	var noYear []flaggedItem
 	for _, f := range flagged {
 		log.Verbose("  [NO LINK] %s: %s", f.name, f.reason)
-		col.RecordMovieFlagged(f.name, f.reason)
 		if f.reason == "no year found" {
 			noYear = append(noYear, f)
+		} else {
+			col.RecordMovieFlagged(f.name, f.reason)
 		}
 	}
 
@@ -263,8 +264,8 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 		log.Normal("  [AMBIGUOUS] %d Part.N folders", len(ambiguous))
 		if !dryRun {
 			for _, a := range ambiguous {
-				t := title(a.name)
-				y := year(a.name)
+				t := Title(a.name)
+				y := Year(a.name)
 				var label string
 				if y != "" {
 					label = fmt.Sprintf("%s (%s)", t, y)
@@ -297,19 +298,27 @@ func Run(cfg *config.Config, dryRun, auto, nonInteractive bool, log Log, col *st
 
 	// TMDB resolution for yearless entries
 	tmdbCount := 0
+	var handled map[string]bool
 	if len(noYear) > 0 && cfg.TMDBApiKey != "" && (auto || !dryRun) {
-		tmdbCount = tmdbResolve(noYear, cfg, dryRun, log, col)
+		tmdbCount, handled = tmdbResolve(noYear, cfg, dryRun, log, col)
+	}
+	// Flag yearless entries that TMDB didn't handle.
+	for _, f := range noYear {
+		if !handled[f.name] {
+			col.RecordMovieFlagged(f.name, f.reason)
+		}
 	}
 
 	log.Normal("[MOVIES] %d entries: %d linked, %d flagged, %d skipped, %d ambiguous, %d TMDB resolved",
 		len(movies), linked, len(flagged), len(skipped), len(ambiguous), tmdbCount)
 
 	return map[string]int{
-		"total":     len(movies),
-		"linked":    linked,
-		"flagged":   len(flagged),
-		"skipped":   len(skipped),
-		"ambiguous": len(ambiguous),
+		"total":         len(movies),
+		"linked":        linked,
+		"flagged":       len(flagged),
+		"skipped":       len(skipped),
+		"ambiguous":     len(ambiguous),
+		"tmdb_resolved": tmdbCount,
 	}
 }
 
@@ -323,10 +332,10 @@ func routeMovie(entryName, t, y, sourceDir string, cfg *config.Config, dryRun bo
 	}
 	primary := common.LargestVideo(vids)
 	if y == "" {
-		y = year(primary.Name)
+		y = Year(primary.Name)
 	}
 	if t == "" {
-		t = title(primary.Name)
+		t = Title(primary.Name)
 	}
 	q := common.ExtractQuality(entryName)
 	if q == "" {
@@ -363,7 +372,8 @@ func routeMovie(entryName, t, y, sourceDir string, cfg *config.Config, dryRun bo
 }
 
 // tmdbResolve runs concurrent TMDB lookups for yearless entries (up to 8 at a time).
-func tmdbResolve(noYear []flaggedItem, cfg *config.Config, dryRun bool, log Log, col *state.Collector) int {
+// Returns the count of resolved entries and a set of entry names that were handled.
+func tmdbResolve(noYear []flaggedItem, cfg *config.Config, dryRun bool, log Log, col *state.Collector) (int, map[string]bool) {
 	log.Normal("  [TMDB] Resolving %d yearless entries...", len(noYear))
 
 	type result struct {
@@ -384,7 +394,7 @@ func tmdbResolve(noYear []flaggedItem, cfg *config.Config, dryRun bool, log Log,
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			t := title(e)
+			t := Title(e)
 			if t == "" || len(t) < 4 {
 				results <- result{e, sd, "", ""}
 				return
@@ -399,11 +409,13 @@ func tmdbResolve(noYear []flaggedItem, cfg *config.Config, dryRun bool, log Log,
 		close(results)
 	}()
 
+	handled := make(map[string]bool)
 	count := 0
 	for r := range results {
+		handled[r.entry] = true
 		if r.found == "" {
 			// TMDB miss — link with parsed name as fallback.
-			t := title(r.entry)
+			t := Title(r.entry)
 			if t == "" || len(t) < 4 {
 				log.Verbose("    [MISS] %s (no usable title)", r.entry)
 				col.RecordMovieUnmatched(r.entry)
@@ -483,5 +495,5 @@ func tmdbResolve(noYear []flaggedItem, cfg *config.Config, dryRun bool, log Log,
 			count++
 		}
 	}
-	return count
+	return count, handled
 }
